@@ -12,7 +12,7 @@ end
 x, test_fun1_approx = get_polynomial_approx(test_fun1, 5, -2, 2)
 test_fun1_approx_numer(s) = test_fun1_approx |> replace(x, s) |> float
 
-x, test_fun1_approx_crazy = get_polynomial_approx(test_fun1, 100, -2, 2)
+x, test_fun1_approx_crazy = get_polynomial_approx(test_fun1, 20, -2, 2)
 test_fun1_approx_crazy_numer(s) = test_fun1_approx_crazy |> replace(x, s) |> float
 
 layer_real = layer(test_fun1, -2, 2)
