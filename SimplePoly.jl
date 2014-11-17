@@ -1,3 +1,5 @@
+using Iterators
+
 # ============= POLYNOMIALS ===============
 
 # Univariate Polynomials
@@ -67,12 +69,10 @@ function get_univar_interpolant_coef(xs::Array{Float64}, ys::Array{Float64})
 end
 
 # do the uni_variate approximation by interpolation at chebyshev points
-function get_univar_approximation(f, deg, a, b)
+function get_univar_approximation(f, n, a, b)
   denorm = get_range_denormalizer(a,b)
-  xs = map(denorm, get_chebyshev_pts(deg+1))
+  xs = map(denorm, get_chebyshev_pts(n))
   ys = Float64[f(x) for x in xs]
-  @show(typeof(xs))
-  @show(typeof(ys))
   Poly1(get_univar_interpolant_coef(xs,ys))
 end
 
@@ -213,4 +213,72 @@ function ∫ (spp :: SumPolyProd, x :: ASCIIString, a, b)
   SumPolyProd(var_order, polyprods)
 end
 
+# Do the approximation into a multi-variate polynomial as a SumPolyProd
 
+# get a d dimensional tchebyshev grid of n sample in each dimension
+# over the domain of the box
+function get_chebyshev_grid(dim, n, box_domain)
+  scaled_nodes = [map(get_range_denormalizer(box_domain[i]...), get_chebyshev_pts(n)) for i in 1:dim]
+  product(scaled_nodes...)
+end
+
+# get the greatest error of a function over a grid
+function sample_greatest_err(f, grid)
+  max([(f(pt...),pt) for pt in grid]...)
+end
+
+# get the function on each lines radiating from a point evaluated
+function get_univar_func(f, pt)
+  ret = Function[]
+  for idx in 1:length(pt)
+    push!(ret, (x) -> (
+            eval_pt = map(j->(j == idx ? x : pt[j]), 1:length(pt));
+            f(eval_pt...)
+          ))
+  end
+  return ret
+end
+
+# get the approximation by pivot at the greatest error points
+# f the function
+# var_order the list of variable names
+# box_domain the box of region to do the approx over
+# number of sample points (degree - 1)
+# give a PolyProd output
+function get_single_approx(f, var_order, n, box_domain)
+  dim = length(var_order)
+  # set up the grid to do the sampling
+  grid = get_chebyshev_grid(dim, n, box_domain)
+  # find by sampling the biggest error
+  err, pivot = sample_greatest_err(f, grid)
+  # construct univariate functions around the pivot
+  univar_funs = get_univar_func(f, pivot)
+  c = 1 / err ^ (dim - 1)
+  univar_funs_approxs = Dict{ASCIIString, Poly1}()
+  for i in 1:dim
+    dom_lower, dom_upper = box_domain[i];
+    univar_approx = get_univar_approximation(univar_funs[i], n, dom_lower, dom_upper)
+    univar_funs_approxs[var_order[i]] = univar_approx
+  end
+  PolyProd(c, var_order, univar_funs_approxs)
+end
+
+# get (rep) number of projections onto the outer product space
+# approximate a function as a SumPolyProd
+function get_m_projections_approx(func, var_order, n, box_domain, rep=None)
+  if rep == None
+    rep = n
+  end
+
+  function rec_get_projection(err_fun :: Function, pp_list :: Array{PolyProd}, proj_togo :: Int64)
+    if proj_togo == 0
+      pp_list
+    else
+      pp_prox = get_single_approx(err_fun, var_order, n, box_domain)
+      nxt_pp_list = [pp_list, pp_prox]
+      nxt_err_fun = (x...) -> err_fun(x...) - peval(pp_prox, [x...])
+      rec_get_projection(nxt_err_fun, nxt_pp_list, proj_togo - 1)
+    end
+  end
+  SumPolyProd(var_order, rec_get_projection(func, PolyProd[], rep))
+end
