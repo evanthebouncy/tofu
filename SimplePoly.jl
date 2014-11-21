@@ -14,11 +14,52 @@ end
 
 # evaluating an uni-variate polynomial
 function peval(p::Poly1, x)
-  ret::Float64 = 0.0
+  ret = 0.0
   for i in 0:length(p.coef)-1
     ret = ret + p.coef[i+1] * x^i
   end
   ret
+end
+
+# The Durand_Kerner method for finding root of a uni-variate polynomial in complex
+# The leading coefficient for p (the one with the highest degree) must be 1
+function Durand_Kerner(p, deg)
+  alph = 0.9 + 0.4im
+  vect = [alph^i for i in 1:deg]
+  for i in 1:30
+    vect_new = []
+    for j in 1:deg
+      rootj = vect[j]
+      others = [vect[i] for i in filter(x->x!=j, 1:deg)]
+      rootj_new = rootj - p(rootj) / reduce(*, Complex64[rootj - rooti for rooti in others])
+      vect_new = [vect_new, rootj_new]
+    end
+    vect = vect_new
+  end
+  vect
+end
+
+# find the real roots of a uni-variate polynomial
+function real_roots(p::Poly1)
+  coefs = p.coef
+  if length(coefs) <= 1
+    return Float64[]
+  end
+  last_term = last(coefs)
+  normalized_coef = coefs / last_term
+  normalized_poly = Poly1(normalized_coef)
+  normalized_poly_numer(x) = peval(normalized_poly, x)
+  roots = Durand_Kerner(normalized_poly_numer, length(coefs) - 1)
+  Float64 [real(root) for root in filter(x-> imag(x) < 0.00001, roots)]
+end
+
+# find the minimum and maximum of a Poly1 over a domain
+# assume roots of the derivitive are given (they maybe pre-computed)
+function pbounds(p::Poly1, roots_of_deriv, dom)
+  included_roots = filter(x->(dom[1]<x<dom[2]), roots_of_deriv)
+  crit_pts = [dom[1], dom[2], included_roots]
+  values = [peval(p, pt) for pt in crit_pts]
+  min(values...), max(values...)
 end
 
 # adding uni-variate polynomials
@@ -48,6 +89,13 @@ function ∫(p1::Poly1)
   Poly1(int_coef)
 end
 
+# take derivitive of polynomial
+function δ(p1::Poly1)
+  coef1 = p1.coef
+  derv_coef = [coef1[i] * (i-1) for i in 2:length(coef1)]
+  Poly1(derv_coef)
+end
+
 # chebyshev points between [-1, 1]
 function get_chebyshev_pts(n)
   [cos(j*pi/n) for j in 0:n]
@@ -75,7 +123,6 @@ function get_univar_approximation(f, n, a, b)
   ys = Float64[f(x) for x in xs]
   Poly1(get_univar_interpolant_coef(xs,ys))
 end
-
 
 # Multivariate Polynomials
 # To be expressed in a summation of products
@@ -108,6 +155,17 @@ function peval(pp :: PolyProd, asmts :: Dict{ASCIIString, Float64})
   ret
 end
 
+# find bounds of a PolyProd object
+function pbounds(pp :: PolyProd, roots_dict, rng)
+  minmaxs = [pbounds(pp.polys[pp.var_order[i]],
+                     roots_dict[pp.polys[pp.var_order[i]]],
+                     rng[i])
+             for i in 1:length(pp.polys)]
+  cross = product(minmaxs...)
+  values = pp.c * [reduce(*, tup) for tup in cross]
+  min(values...), max(values...)
+end
+
 # takes 2 var orders and merge them to 1, perserves some order
 function merge_varorder(vo1, vo2)
   [[x for x in vo1], filter(y->!(y in vo1), vo2)]
@@ -122,6 +180,12 @@ end
 function + (pp1 :: PolyProd, pp2 :: PolyProd)
   assert(can_join(pp1, pp2))
   c = pp1.c + pp2.c
+  PolyProd(c, pp1.var_order, pp1.polys)
+end
+
+# negate
+function - (pp1 :: PolyProd)
+  c = -pp1.c
   PolyProd(c, pp1.var_order, pp1.polys)
 end
 
@@ -150,7 +214,6 @@ function ∫ (pp :: PolyProd, x, a, b)
   polys = [name => pp.polys[name] for name in var_order]
   PolyProd(c, var_order, polys)
 end
-
 
 # Sums of Products Of (univar)Polynomials
 immutable SumPolyProd
@@ -190,7 +253,57 @@ function peval(spp :: SumPolyProd, asmts :: Dict{ASCIIString, Float64})
   ret
 end
 
+# give a spp, the root of its derivitives, and a domain
+# provide a bound
+function pbounds(spp::SumPolyProd, root_dict, dom)
+  values = [pbounds(pp, root_dict, dom) for pp in spp.polyprods]
+  minval = reduce(+, map(x->x[1], values))
+  maxval = reduce(+, map(x->x[2], values))
+  minval, maxval
+end
 
+# given a spp, create a bound object that, when taking in a domain
+# give a lower / upper bound of it
+function get_bound_object(spp::SumPolyProd)
+  root_dict = Dict{Poly1, Array{Float64}}()
+  for pp in spp.polyprods
+    for v_name in pp.var_order
+      p = pp.polys[v_name]
+      if !(p in keys(root_dict))
+        root_dict[p] = real_roots(δ(p))
+      end
+    end
+  end
+
+  function bound_object(dom)
+    pbounds(spp, root_dict, dom)
+  end
+
+  bound_object
+end
+
+# arithmentic operations
+
+# addition
+function + (spp1 :: SumPolyProd, spp2 :: SumPolyProd)
+  var_order = merge_varorder(spp1.var_order, spp2.var_order)
+  polyprods = [spp1.polyprods, spp2.polyprods]
+  SumPolyProd(var_order, polyprods)
+end
+
+# negation
+function - (spp1 :: SumPolyProd)
+  var_order = spp1.var_order
+  polyprods = [PolyProd(-1.0 * pp.c, pp.var_order, pp.polys) for pp in spp1.polyprods]
+  SumPolyProd(var_order, polyprods)
+end
+
+# subtraction
+function - (spp1 :: SumPolyProd, spp2 :: SumPolyProd)
+  spp1 + (- spp2)
+end
+
+# multiplication
 function * (spp1 :: SumPolyProd, spp2 :: SumPolyProd)
   var_order = merge_varorder(spp1.var_order, spp2.var_order)
   polyprods = PolyProd[]

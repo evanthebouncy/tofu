@@ -7,20 +7,53 @@ y = linspace(-5, 5, ls_size)
 
 f11(x,y) = 1 / (1 +(x - y)^2)
 f22(x,y) = 1 / (1 + (x + y)^2)
+f_sq(x,y) = 1 / (1 + (x^2 - y - 2)^2)
+f_y(y) = 1 / (1 + (y-2)^2)
 
-f11_approx = get_m_projections_approx(f11, ["x", "y"], 5, [(-5, 5), (-5, 5)])
+f11_approx = get_m_projections_approx(f11, ["x", "y"], 11, [(-5, 5), (-5, 5)])
 numer_f11(x,y) = peval(f11_approx, [x,y])
 plot(z=numer_f11, x=x, y=y, Geom.contour)
 plot(z=f11, x=x, y=y, Geom.contour)
+plot(f_y, -5, 5)
 
+f_sq_approx = get_m_projections_approx(f_sq, ["x", "y"], 15, [(-5, 5), (-5, 5)])
+f_sq_numer(x,y) = peval(f_sq_approx, [x,y])
+plot(z=f_sq_numer, x=x, y=y, Geom.contour)
+plot(z=f_sq, x=x, y=y, Geom.contour)
 
-f22_approx = get_m_projections_approx(f22, ["x", "y"], 3, [(-5, 5), (-5, 5)])
+two_const = f11_approx * f_sq_approx
+two_const_numer(x,y) = peval(two_const, [x,y])
+two_const_numer(1.1, 2.2)
+consts_numer(x,y) = peval(two_const, [x,y])
+
+plot(z=consts_numer, x=x, y=y, Geom.contour)
+
+prob_x = ∫(two_const, "x", -5, 5)
+prob_x_numer(x) = peval(prob_x, [x])
+plot(prob_x_numer, -5, 5)
+
+f_y_approx = get_m_projections_approx(f_y, ["y"], 5, [(-5, 5)])3
+f_prod = f_sq_approx * f_y_approx
+f_prod_numer(x,y) = peval(f_prod, [x,y])
+plot(z=f_prod_numer, x=x, y=y, Geom.contour)
+
+f_x_approx = ∫(f_sq_approx*f_y_approx, "y", -5, 5)
+f_x_numer(x) = peval(f_x_approx, [x])
+plot(f_x_numer, -5, 5)
+
+f22_approx = get_m_projections_approx(f22, ["x", "y"], 5, [(-5, 5), (-5, 5)])
 numer_f22(x,y) = peval(f22_approx, [x,y])
 plot(z=numer_f22, x=x, y=y, Geom.contour)
 
 f33_approx = f11_approx * f22_approx
 numer_f33(x,y) = peval(f33_approx, [x,y])
 plot(z=numer_f33, x=x, y=y, Geom.contour)
+
+f33_int = ∫(f33_approx, "y", -4, 4)
+numer_f33_int(x) = peval(f33_int, [x])
+numer_f33_int(3.0)
+plot(numer_f33_int, -4, 4)
+
 
 # ========================================testing stuff only...
 
