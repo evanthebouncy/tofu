@@ -72,6 +72,17 @@ function +(p1::Poly1, p2::Poly1)
   Poly1(ext_coef1 + ext_coef2)
 end
 
+# negation
+function -(p1::Poly1)
+  coef = [-1.0 * x for x in p1.coef]
+  Poly1(coef)
+end
+
+# subtraction
+function -(p1::Poly1, p2::Poly1)
+  p1 + (- p2)
+end
+
 # multipling uni-variate polynomials
 function * (p1::Poly1, p2::Poly1)
   coef1, coef2 = p1.coef, p2.coef
@@ -394,4 +405,153 @@ function get_m_projections_approx(func, var_order, n, box_domain, rep=None)
     end
   end
   SumPolyProd(var_order, rec_get_projection(func, PolyProd[], rep))
+end
+
+# ============ The STD basis for polynomials =======================
+# ============ Useful for finding differences of polynomials =======
+
+type STDPolyTerm
+  c :: Float64
+  var_order :: Array{ASCIIString}
+  term :: Dict{ASCIIString, Int64}
+end
+
+function can_join(spt1 :: STDPolyTerm, spt2 :: STDPolyTerm)
+  spt1.term == spt2.term
+end
+
+function + (term1 :: STDPolyTerm, term2 :: STDPolyTerm)
+  assert(can_join(term1, term2))
+  STDPolyTerm(term1.c + term2.c, copy(term1.var_order), copy(term1.term))
+end
+
+function - (term1 :: STDPolyTerm)
+  STDPolyTerm(-1.0 * term1.c, copy(term1.var_order), copy(term1.term))
+end
+
+function * (term1 :: STDPolyTerm, term2 :: STDPolyTerm)
+  c = term1.c * term2.c
+  var_order = merge_varorder(term1.var_order, term2.var_order)
+  term = copy(term1.term)
+  for var_name in keys(term2.term)
+    if var_name in keys(term)
+      term[var_name] = term[var_name] + term2.term[var_name]
+    else
+      term[var_name] = term2.term[var_name]
+    end
+  end
+  STDPolyTerm(c, var_order, term)
+end
+
+function peval(term::STDPolyTerm, lst_vals::Array{Float64})
+  assert(length(lst_vals) == length(term.var_order))
+  ret = term.c
+  for i in 1:length(lst_vals)
+    var_name = term.var_order[i]
+    var_exp = term.term[var_name]
+    var_value = lst_vals[i]
+    ret *= var_value ^ var_exp
+  end
+  ret
+end
+
+function peval(term::STDPolyTerm, lst_asmt::Dict{ASCIIString,Float64})
+  # make sure all var_name are in the keys
+  for var_name in term.var_order
+    assert(var_name in keys(lst_asmt))
+  end
+  ret = term.c
+  for var_name in term.var_order
+    var_exp = term.term[var_name]
+    var_value = lst_asmt[var_name]
+    ret *= var_value ^ var_exp
+  end
+  ret
+end
+
+type STDPoly
+  var_order :: Array{ASCIIString}
+  terms :: Array{STDPolyTerm}
+end
+
+function peval(stdpoly :: STDPoly, lst_vals :: Array{Float64})
+  assert(length(stdpoly.var_order) == length(lst_vals))
+  asmts = [stdpoly.var_order[i] => lst_vals[i] for i in 1:length(lst_vals)] :: Dict{ASCIIString,Float64}
+  reduce(+, [peval(term, asmts) for term in stdpoly.terms])
+end
+
+function add1!(terms, other_term)
+  for term in terms
+    if can_join(term, other_term)
+      c = term.c + other_term.c
+      tterm = copy(term.term)
+      splice!(terms, findfirst(terms, term))
+      push!(terms, STDPolyTerm(c, term.var_order, tterm))
+      return terms
+    end
+  end
+  push!(terms, other_term)
+end
+
+function + (p1 :: STDPoly, p2 :: STDPoly)
+  var_order = merge_varorder(p1.var_order, p2.var_order)
+  terms = STDPolyTerm[term for term in p1.terms]
+
+  for other_term in p2.terms
+    add1!(terms, other_term)
+  end
+  STDPoly(var_order, terms)
+end
+
+function - (p1 :: STDPoly)
+  var_order = copy(p1.var_order)
+  terms = [-(term) for term in p1.terms]
+  STDPoly(var_order, terms)
+end
+
+function - (p1 :: STDPoly, p2 :: STDPoly)
+  p1 + (- p2)
+end
+
+function * (p1 :: STDPoly, p2 :: STDPoly)
+  var_order = merge_varorder(p1.var_order, p2.var_order)
+  all_prods = STDPolyTerm[t1 * t2 for (t1, t2) in product(p1.terms, p2.terms)]
+  terms = STDPolyTerm[]
+  for t in all_prods
+    add1!(terms, t)
+  end
+  STDPoly(var_order, terms)
+end
+
+# convert SumPolyProd to STDPoly
+# one at a time
+
+function PolyProd_to_STDPoly(p1 :: PolyProd)
+  var_order = p1.var_order
+  c = p1.c
+  stdpolys = STDPoly[ ]
+  to_push =  STDPoly([], [STDPolyTerm(c, [], Dict{ASCIIString,Int64}())]) :: STDPoly
+  push!(stdpolys,  to_push)
+  for var_name in var_order
+    coefs = p1.polys[var_name].coef
+    terms = STDPolyTerm[]
+    for i in 1:length(coefs)
+      termc = coefs[i]
+      term_term = Dict{ASCIIString, Int64}()
+      term_var_order = ASCIIString[]
+      if i > 1
+        expon = i - 1
+        push!(term_var_order, var_name)
+        term_term[var_name] = expon
+      end
+      push!(terms, STDPolyTerm(termc, term_var_order, term_term))
+    end
+    push!(stdpolys, STDPoly([var_name], terms))
+  end
+  reduce(*, stdpolys)
+end
+
+function SumPolyProd_to_STDPoly(p1 :: SumPolyProd)
+  std_polys = [PolyProd_to_STDPoly(p) for p in p1.polyprods]
+  reduce(+, std_polys)
 end
