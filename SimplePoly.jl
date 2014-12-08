@@ -1,4 +1,5 @@
 using Iterators
+using Optim
 
 # ============= POLYNOMIALS ===============
 
@@ -226,6 +227,17 @@ function ∫ (pp :: PolyProd, x, a, b)
   PolyProd(c, var_order, polys)
 end
 
+function δ (pp :: PolyProd, x)
+  assert(x in pp.var_order)
+  poly1 = pp.polys[x]
+  poly1_der = δ(poly1)
+  c = pp.c
+  var_order = copy(pp.var_order)
+  polys = copy(pp.polys)
+  polys[x] = poly1_der
+  PolyProd(c, var_order, polys)
+end
+
 # Sums of Products Of (univar)Polynomials
 immutable SumPolyProd
   var_order :: Array{ASCIIString}
@@ -337,6 +349,163 @@ function ∫ (spp :: SumPolyProd, x :: ASCIIString, a, b)
   SumPolyProd(var_order, polyprods)
 end
 
+function δ (spp :: SumPolyProd, der_var :: ASCIIString)
+  var_order = copy(spp.var_order)
+  polyprods = PolyProd[δ(pp, der_var) for pp in spp.polyprods]
+  SumPolyProd(var_order, polyprods)
+end
+
+function get_single_sample(dom1)
+  left_end = [x[1] for x in dom1]
+  lengthz  = [x[2]-x[1] for x in dom1]
+  [left_end[i] + rand() * lengthz[i] for i in 1:length(dom1)]
+end
+
+# use n random starting points combined with gradient descent to
+# find a point of maximum within the domain
+function grad_approx_max(ddf :: DifferentiableFunction, dom, n_samples)
+  results = [fminbox(ddf, get_single_sample(dom), [x[1] for x in dom], [x[2] for x in dom])]
+  max([-1.0 * result.f_minimum for result in results]..., -Inf)
+end
+
+# for a spp solve for the maximum of it
+function solve_max(spp :: SumPolyProd, dom_init)
+  # some constants and a counter
+  dom_tol = 1.0e-10
+  range_tol = 1.0e-10
+  # for information only
+  cnt = 0
+  best_dom = (0.0, 0.0)
+  best_bnd = (0.0, 0.0)
+
+  # divide a domain in half along the greatest axis
+  function split_half(dom)
+    dom_w_length = [(d[2]-d[1],d) for d in dom]
+    size, maxd = max(dom_w_length...)
+    half1 = (maxd[1], (maxd[1] + maxd[2]) / 2)
+    half2 = ((maxd[1] + maxd[2]) / 2, maxd[2])
+    ret1 = [x for x in dom]
+    ret1[findfirst(ret1, maxd)] = half1
+    ret2 = [x for x in dom]
+    ret2[findfirst(ret2, maxd)] = half2
+    ret1, ret2
+  end
+
+  function max_length(dom)
+    max([d[2]-d[1] for d in dom]...)
+  end
+
+
+
+  function interior(dom)
+    return true
+    for i in 1:length(dom)
+      low, upp = dom[i]
+      edge_low, edge_upp = dom_init[i]
+      if (low == edge_low) | (upp == edge_upp)
+        return false
+      end
+    end
+    return true
+  end
+
+  # give the bounding object for the function itself
+  value_bound_obj = get_bound_object(spp)
+
+  # give the bounding objects for all the partial derivatives
+  all_partials = SumPolyProd[δ(spp, x) for x in spp.var_order]
+  all_partials_bnd_obj = [get_bound_object(spp1) for spp1 in all_partials]
+
+  #provide the DifferentiableFunction object for the sampler
+  function spp_enum(x::Vector)
+    -1.0 * peval(spp, x)
+  end
+  function spp_enum_grad!(x::Vector, storage::Vector)
+    for i in 1:length(x)
+      storage[i] = -1.0 * peval(all_partials, x)
+    end
+  end
+  function spp_with_grad!(x::Vector, storage)
+    for i in 1:length(x)
+      storage[i] = -1.0 * peval(all_partials[i], x)
+    end
+    spp_enum(x)
+  end
+  ddf = DifferentiableFunction(spp_enum, spp_enum_grad!, spp_with_grad!)
+
+
+  # this constraint stats that if you are in the interior of the domain,
+  # you must have the property that all your partial derivs can possibly be 0 for max to exist
+  function constraint_partial(dom)
+    if (interior(dom))
+      all_bnds = [bnder(dom) for bnder in all_partials_bnd_obj]
+      reduce(&, [bnd[1]<=0.0<=bnd[2] for bnd in all_bnds])
+    else
+      true
+    end
+  end
+
+  # this constraint stats that if you want to have a shot of being the max
+  # you better have an interval whose maximum is greater than the current max
+  function constraint_max(dom)
+    low, upp = value_bound_obj(dom)
+    (upp - cur_max) > range_tol
+  end
+
+  # this constraint stats that if your dom_tol is too small
+  # we should stop splitting you
+  function constraint_dom_tol!(dom)
+    if (max_length(dom) < dom_tol)
+      println("giving up, dom too small, updating cur_max with whats provable on this region")
+      cur_max = max(cur_max, value_bound_obj(dom)[2])
+    end
+    max_length(dom) > dom_tol
+  end
+
+  # if you satisify this you will be split and put back into the queue
+  function sat_split_constraints(dom)
+    constraint_partial(dom) &
+      constraint_max(dom) &
+      constraint_dom_tol!(dom)
+  end
+
+  dom_tol = max_length(dom_init) / 100
+  doms = typeof(dom_init)[]
+  push!(doms, dom_init)
+  # the current maximum we want to keep track of, initialized at a random point's value
+  # cur_max = peval(spp, get_single_sample(dom_init))
+  cur_max = -Inf
+  while ( length(doms) > 0 )
+    cnt += 1
+    @show(cnt, length(doms), cur_max)
+    dom_cur = pop!(doms)
+
+    # attempt to improve max by sampling, may fail with linsearch converge
+    try
+      cur_max = max(cur_max, grad_approx_max(ddf, dom_init, 3))
+      range_tol = 0.01 * cur_max
+    catch
+
+    end
+
+    low, upp = value_bound_obj(dom_cur)
+    if upp - low < range_tol
+      if (upp > cur_max)
+        best_dom = dom_cur
+        best_bnd = (low, upp)
+      end
+      cur_max = max(cur_max, upp)
+    end
+    if sat_split_constraints(dom_cur)
+      half1, half2 = split_half(dom_cur)
+      push!(doms, half1)
+      push!(doms, half2)
+    end
+  end
+  cur_max + range_tol
+end
+
+
 # Do the approximation into a multi-variate polynomial as a SumPolyProd
 
 # get a d dimensional tchebyshev grid of n sample in each dimension
@@ -416,6 +585,15 @@ type STDPolyTerm
   term :: Dict{ASCIIString, Int64}
 end
 
+function to_print(term :: STDPolyTerm)
+  print(term.c)
+  for var in term.var_order
+    print(var)
+    print("^")
+    print(term.term[var])
+  end
+end
+
 function can_join(spt1 :: STDPolyTerm, spt2 :: STDPolyTerm)
   spt1.term == spt2.term
 end
@@ -472,6 +650,13 @@ end
 type STDPoly
   var_order :: Array{ASCIIString}
   terms :: Array{STDPolyTerm}
+end
+
+function to_print(pol :: STDPoly)
+  for t in pol.terms
+    to_print(t)
+    print(" + ")
+  end
 end
 
 function peval(stdpoly :: STDPoly, lst_vals :: Array{Float64})
@@ -555,3 +740,4 @@ function SumPolyProd_to_STDPoly(p1 :: SumPolyProd)
   std_polys = [PolyProd_to_STDPoly(p) for p in p1.polyprods]
   reduce(+, std_polys)
 end
+
