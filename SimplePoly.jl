@@ -1,5 +1,6 @@
 using Iterators
 using Optim
+include("/home/evan/Documents/research/tofu/Domain.jl")
 
 # ============= POLYNOMIALS ===============
 
@@ -10,8 +11,17 @@ immutable Poly1
   coef :: Array{Float64}
 end
 
+function degenerate(p :: Poly1)
+  # has_NAN = NaN in p.coef
+  all_too_small = reduce(&, [abs(ci) < 1e-10 for ci in p.coef])
+  one_too_large = reduce(|, [abs(ci) > 1e10 for ci in p.coef])
+  all_too_small | one_too_large
+end
+
 # equality
 == (p1 :: Poly1, p2 :: Poly1) = (p1.coef == p2.coef)
+# hash
+Base.hash(p::Poly1, h::Uint) = hash(p.coef, h)
 
 # evaluating an uni-variate polynomial
 function peval(p::Poly1, x)
@@ -122,10 +132,13 @@ end
 # do the uni_variate interpolation at tchebychev points and give coefficients in std basis
 # a simple algorithm, does not use chebyshev polynomials, but for low degrees it is ok
 function get_univar_interpolant_coef(xs::Array{Float64}, ys::Array{Float64})
+  @show(xs, ys)
   n = length(xs)
   mat_vec = vcat([map(x->x^i, xs) for i in 0:n-1]...)
   mat = reshape(mat_vec, n, n)
-  inv(mat) * ys
+  ret = inv(mat) * ys
+  @show(ret)
+  ret
 end
 
 # do the uni_variate approximation by interpolation at chebyshev points
@@ -147,6 +160,12 @@ immutable PolyProd
   c :: Float64
   var_order :: Array{ASCIIString}
   polys :: Dict{ASCIIString, Poly1}
+end
+
+function degenerate(pp :: PolyProd)
+  c_too_large = abs(pp.c) == Inf
+  polys_degen = reduce(|, [degenerate(p1) for p1 in values(pp.polys)])
+  c_too_large | polys_degen
 end
 
 # evaluation
@@ -217,6 +236,14 @@ function * (pp1 :: PolyProd, pp2 :: PolyProd)
   PolyProd(c, var_order, polys)
 end
 
+# multiplication by constant
+function * (c1 :: Float64, pp1 :: PolyProd)
+  c = pp1.c * c1
+  var_order = pp1.var_order
+  polys = copy(pp1.polys)
+  PolyProd(c, var_order, polys)
+end
+
 function ∫ (pp :: PolyProd, x, a, b)
   assert(x in pp.var_order)
   poly1 = pp.polys[x]
@@ -242,6 +269,10 @@ end
 immutable SumPolyProd
   var_order :: Array{ASCIIString}
   polyprods :: Array{PolyProd}
+end
+
+function degenerate(spp :: SumPolyProd)
+  reduce(|, [degenerate(pp) for pp in spp.polyprods])
 end
 
 # try to successively add to a list of PolyProd while reducing like-terms
@@ -338,6 +369,13 @@ function * (spp1 :: SumPolyProd, spp2 :: SumPolyProd)
   SumPolyProd(var_order, polyprods)
 end
 
+# multiplication by constant
+function * (c1 :: Float64, spp1 :: SumPolyProd)
+  var_order = spp1.var_order
+  polyprods = [c1 * pp for pp in spp1.polyprods]
+  SumPolyProd(var_order, polyprods)
+end
+
 function ∫ (spp :: SumPolyProd, x :: ASCIIString, a, b)
   assert(x in spp.var_order)
   var_order = filter(name->(name != x), spp.var_order)
@@ -355,16 +393,14 @@ function δ (spp :: SumPolyProd, der_var :: ASCIIString)
   SumPolyProd(var_order, polyprods)
 end
 
-function get_single_sample(dom1)
-  left_end = [x[1] for x in dom1]
-  lengthz  = [x[2]-x[1] for x in dom1]
-  [left_end[i] + rand() * lengthz[i] for i in 1:length(dom1)]
-end
+
 
 # use n random starting points combined with gradient descent to
 # find a point of maximum within the domain
 function grad_approx_max(ddf :: DifferentiableFunction, dom, n_samples)
+  @show(dom)
   results = [fminbox(ddf, get_single_sample(dom), [x[1] for x in dom], [x[2] for x in dom])]
+  @show(results)
   max([-1.0 * result.f_minimum for result in results]..., -Inf)
 end
 
@@ -377,25 +413,6 @@ function solve_max(spp :: SumPolyProd, dom_init)
   cnt = 0
   best_dom = (0.0, 0.0)
   best_bnd = (0.0, 0.0)
-
-  # divide a domain in half along the greatest axis
-  function split_half(dom)
-    dom_w_length = [(d[2]-d[1],d) for d in dom]
-    size, maxd = max(dom_w_length...)
-    half1 = (maxd[1], (maxd[1] + maxd[2]) / 2)
-    half2 = ((maxd[1] + maxd[2]) / 2, maxd[2])
-    ret1 = [x for x in dom]
-    ret1[findfirst(ret1, maxd)] = half1
-    ret2 = [x for x in dom]
-    ret2[findfirst(ret2, maxd)] = half2
-    ret1, ret2
-  end
-
-  function max_length(dom)
-    max([d[2]-d[1] for d in dom]...)
-  end
-
-
 
   function interior(dom)
     return true
@@ -568,18 +585,63 @@ function get_m_projections_approx(func, var_order, n, box_domain, rep=None)
       pp_list
     else
       pp_prox = get_single_approx(err_fun, var_order, n, box_domain)
-      nxt_pp_list = [pp_list, pp_prox]
-      nxt_err_fun = (x...) -> err_fun(x...) - peval(pp_prox, [x...])
-      rec_get_projection(nxt_err_fun, nxt_pp_list, proj_togo - 1)
+      # if we have a degenerate polynomial approx, truncate
+      if (degenerate(pp_prox))
+        pp_list
+      else
+        nxt_pp_list = [pp_list, pp_prox]
+        nxt_err_fun = (x...) -> err_fun(x...) - peval(pp_prox, [x...])
+        rec_get_projection(nxt_err_fun, nxt_pp_list, proj_togo - 1)
+      end
     end
   end
-  SumPolyProd(var_order, rec_get_projection(func, PolyProd[], rep))
+  ret = SumPolyProd(var_order, rec_get_projection(func, PolyProd[], rep))
+  @show(ret)
+  ret
+end
+
+# SPP with a shift by a constant.
+immutable SumPolyProdC
+  spp :: SumPolyProd
+  c :: Float64
+end
+
+function peval(sppc :: SumPolyProdC, x)
+  peval(sppc.spp, x) + sppc.c
+end
+
+# basic arithmantic operations on SPPC
+function + (sppc1 :: SumPolyProdC, sppc2 :: SumPolyProdC)
+  spp = sppc1.spp + sppc2.spp
+  c = sppc1.c + sppc2.c
+  SumPolyProdC(spp, c)
+end
+
+function * (sppc1 :: SumPolyProdC, sppc2 :: SumPolyProdC)
+  spp1, spp2 = sppc1.spp, sppc2.spp
+  c1, c2 = sppc1.c, sppc2.c
+  spp = (spp1 * spp2) + (c1 * spp2) + (c2 * spp1)
+  c = c1 * c2
+  SumPolyProdC(spp, c)
+end
+
+function ∫ (sppc :: SumPolyProdC, x :: ASCIIString, a, b)
+  spp, c = sppc.spp, sppc.c
+  spp_int = ∫(spp, x, a, b)
+  c_int = c * (b - a)
+  SumPolyProdC(spp_int, c_int)
+end
+
+function get_bound_object(sppc :: SumPolyProdC)
+  bnd_obj_spp = get_bound_object(sppc.spp)
+  bounder(dom) = sppc.c + [bnd_obj_spp(dom)...]
+  bounder
 end
 
 # ============ The STD basis for polynomials =======================
 # ============ Useful for finding differences of polynomials =======
 
-type STDPolyTerm
+immutable STDPolyTerm
   c :: Float64
   var_order :: Array{ASCIIString}
   term :: Dict{ASCIIString, Int64}
@@ -647,7 +709,7 @@ function peval(term::STDPolyTerm, lst_asmt::Dict{ASCIIString,Float64})
   ret
 end
 
-type STDPoly
+immutable STDPoly
   var_order :: Array{ASCIIString}
   terms :: Array{STDPolyTerm}
 end
