@@ -3,78 +3,77 @@ include("/home/evan/Documents/research/tofu/SimplePoly.jl")
 include("/home/evan/Documents/research/tofu/Domain.jl")
 using Optim
 
-# get maximum error
-# given a Potential f and a polynomial p over a domain d,
-# give the bounds btwn them, i.e. a and b such that
-# p - a <= f <= p + b. i.e. we have a tube containing f
-# i.e. a >= p - f  and  b >= f - p
-function get_maximum_errors(f :: Potential, p :: SumPolyProd, dom_init)
-  # book keepings
+function get_max_value(f_bounds :: Function, dom_init, f_d_bounds = None)
   cnt = 0
-  # some constants
-  dom_tol = max_length(dom_init) / 1000
-  range_tol = 1.0e-10
 
-  cur_a = -Inf
-  cur_b = -Inf
-
-  doms = typeof(dom_init)[]
-  push!(doms, dom_init)
-
-  function numer_a(x :: Vector)
-    peval(p, x) - f.potential_fun(x...)
-  end
-  ddf_a = DifferentiableFunction(numer_a)
-  function numer_b(x :: Vector)
-    f.potential_fun(x...) - peval(p, x)
-  end
-  ddf_b = DifferentiableFunction(numer_b)
-
-  p_bnd_obj = get_bound_object(p)
-
-  function value_bound_ab(dom)
-    p_low, p_high = p_bnd_obj(dom)
-    f_low, f_high = f.potential_bnd(dom)
-    a_bnd = p_high - f_low
-    b_bnd = f_high - p_low
-    a_bnd, b_bnd
+  # negative of the maximum value as priority
+  function get_priority(dom)
+    bound = f_bounds(dom)
+    -1.0 * bound[2]
   end
 
-  function sat_split_constraints(dom)
-    a_bnd, b_bnd = value_bound_ab(dom)
-    (a_bnd > cur_a) | (b_bnd > cur_b)
+  function interior(dom)
+    for i in 1:length(dom)
+      low, upp = dom[i]
+      edge_low, edge_upp = dom_init[i]
+      if (low == edge_low) | (upp == edge_upp)
+        return false
+      end
+    end
+    return true
   end
 
-  while ( length(doms) > 0 )
+  # this constraint stats that if you are in the interior of the domain,
+  # you must have the property that all your partial derivs can possibly be 0 for max to exist
+  function constraint_partial(dom)
+    if (interior(dom))
+      all_bnds = [bnder(dom) for bnder in f_d_bounds]
+      reduce(&, [bnd[1] - 1e-10 <=0.0<=bnd[2] + 1e-10 for bnd in all_bnds])
+    else
+      true
+    end
+  end
+
+  doms = Collections.PriorityQueue()
+  Collections.enqueue!(doms, dom_init, get_priority(dom_init))
+
+  function sat_split_constraints!(dom)
+    if dom in keys(doms)
+      return false
+    end
+    if f_d_bounds == None
+      true
+    else
+      constraint_partial(dom)
+    end
+  end
+
+  while (cnt < 500)
     cnt += 1
-    @show(cnt, length(doms), cur_a, cur_b)
-    dom_cur = pop!(doms)
-
-    # attempt to improve cur_a and cur_b, may fail with linsearch converge
-    try
-      cur_a = max(cur_a, grad_approx_max(ddf_a, doms[rand(1:length(doms))], 3))
-      cur_b = max(cur_b, grad_approx_max(ddf_b, doms[rand(1:length(doms))], 3))
-      range_tol = 0.01 * 0.5 * (cur_a + cur_b)
-    catch
+    @show(cnt, length(doms))
+    dom_cur = Collections.dequeue!(doms)
+    @show(max_length(dom_cur), [f_d_bound(dom_cur) for f_d_bound in f_d_bounds], f_bounds(dom_cur))
+    half1, half2 = split_half(dom_cur)
+    if sat_split_constraints!(half1)
+      @show("queued", half1)
+      Collections.enqueue!(doms, half1, get_priority(half1))
     end
-
-    a_bnd, b_bnd = value_bound_ab(dom_cur)
-    if a_bnd + b_bnd < range_tol
-      cur_a = max(cur_a, a_bnd)
-      cur_b = max(cur_b, b_bnd)
-    end
-    if sat_split_constraints(dom_cur)
-      half1, half2 = split_half(dom_cur)
-      push!(doms, half1)
-      push!(doms, half2)
+    if sat_split_constraints!(half2)
+      @show("queued", half2)
+      Collections.enqueue!(doms, half2, get_priority(half2))
     end
   end
-  cur_a + range_tol, cur_b + range_tol
+  dom_last = Collections.dequeue!(doms)
+  f_bounds(dom_last), doms
 end
 
 # get the polynomial abstraction over a domain for a potential f
 function get_poly_abstraction(f :: Potential, var_order, dom, degree)
   spp_approx = get_m_projections_approx(f.potential_fun, var_order, degree, dom)
+
+  function positive_err_bound(dom)
+  end
+
   shift_down, shift_up = get_maximum_errors(f, spp_approx, dom)
   SumPolyProdC(spp_approx, -1.0 * shift_down), SumPolyProdC(spp_approx, shift_up)
 end

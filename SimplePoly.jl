@@ -11,6 +11,11 @@ immutable Poly1
   coef :: Array{Float64}
 end
 
+function to_string(p :: Poly1, var_name)
+  coe_pow = ["($(p.coef[i]))*$var_name^$i" for i in 1:length(p.coef)]
+  reduce((x,y)->string(x,"+",y), coe_pow)
+end
+
 function degenerate(p :: Poly1)
   # has_NAN = NaN in p.coef
   all_too_small = reduce(&, [abs(ci) < 1e-10 for ci in p.coef])
@@ -132,12 +137,10 @@ end
 # do the uni_variate interpolation at tchebychev points and give coefficients in std basis
 # a simple algorithm, does not use chebyshev polynomials, but for low degrees it is ok
 function get_univar_interpolant_coef(xs::Array{Float64}, ys::Array{Float64})
-  @show(xs, ys)
   n = length(xs)
   mat_vec = vcat([map(x->x^i, xs) for i in 0:n-1]...)
   mat = reshape(mat_vec, n, n)
   ret = inv(mat) * ys
-  @show(ret)
   ret
 end
 
@@ -160,6 +163,14 @@ immutable PolyProd
   c :: Float64
   var_order :: Array{ASCIIString}
   polys :: Dict{ASCIIString, Poly1}
+end
+
+function to_string(pp :: PolyProd)
+  ret = string(pp.c, "*")
+  prods = [string("(",to_string(pp.polys[var_name],var_name),")")
+           for var_name in pp.var_order]
+  prods_str = reduce((x,y)->string(x,"*",y), prods)
+  string(ret, prods_str)
 end
 
 function degenerate(pp :: PolyProd)
@@ -269,6 +280,12 @@ end
 immutable SumPolyProd
   var_order :: Array{ASCIIString}
   polyprods :: Array{PolyProd}
+end
+
+function to_string(spp :: SumPolyProd)
+  pp_strs = [to_string(pp) for pp in spp.polyprods]
+  pp_str = reduce((x,y)->string(x,"+",y), pp_strs)
+  pp_str
 end
 
 function degenerate(spp :: SumPolyProd)
@@ -398,9 +415,7 @@ end
 # use n random starting points combined with gradient descent to
 # find a point of maximum within the domain
 function grad_approx_max(ddf :: DifferentiableFunction, dom, n_samples)
-  @show(dom)
   results = [fminbox(ddf, get_single_sample(dom), [x[1] for x in dom], [x[2] for x in dom])]
-  @show(results)
   max([-1.0 * result.f_minimum for result in results]..., -Inf)
 end
 
@@ -596,7 +611,6 @@ function get_m_projections_approx(func, var_order, n, box_domain, rep=None)
     end
   end
   ret = SumPolyProd(var_order, rec_get_projection(func, PolyProd[], rep))
-  @show(ret)
   ret
 end
 
@@ -645,6 +659,14 @@ immutable STDPolyTerm
   c :: Float64
   var_order :: Array{ASCIIString}
   term :: Dict{ASCIIString, Int64}
+end
+
+function to_string(std_term :: STDPolyTerm)
+  ret = string("(", std_term.c)
+  for var in std_term.var_order
+    ret = string(ret, "*", var, "^", string(std_term.term[var]))
+  end
+  string(ret,")")
 end
 
 function to_print(term :: STDPolyTerm)
@@ -713,6 +735,12 @@ immutable STDPoly
   var_order :: Array{ASCIIString}
   terms :: Array{STDPolyTerm}
 end
+
+function to_string(std_poly :: STDPoly)
+  term_lst = [to_string(term) for term in std_poly.terms]
+  reduce((x,y)->string(x,"+",y), term_lst)
+end
+
 
 function to_print(pol :: STDPoly)
   for t in pol.terms

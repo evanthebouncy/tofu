@@ -66,7 +66,9 @@ function get_bounder_from_dist(dist_fun)
     radius = diag_radius_length(dom)
     min_dist = max(0.0, dist_fun(mid_pt...) - radius)
     max_dist = dist_fun(mid_pt...) + radius
-    dist_to_potential(min_dist), dist_to_potential(max_dist)
+    pot_close, pot_far = dist_to_potential(min_dist), dist_to_potential(max_dist)
+    # the lower bound actually comes from the far point when converted to potential
+    pot_far, pot_close
   end
   bounder
 end

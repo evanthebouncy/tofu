@@ -6,15 +6,17 @@ small_lower, small_upper = 1.5, 2.0
 
 feq_apx = get_m_projections_approx(feq, ["x","y"], 3, [(large_lower, large_upper),(large_lower, large_upper)])
 feq_apx2 = get_m_projections_approx(feq, ["x","y"], 3, [(small_lower, small_upper), (small_lower, small_upper)])
-
 diff_poly = feq_apx2 - feq_apx
+solve_max(diff_poly, [(small_lower, small_upper), (small_lower, small_upper)])
 
 using Gadfly
 diff_numer(x,y) = peval(diff_poly, [x,y])
 plot(x = linspace(small_lower, small_upper, 1000), y = linspace(small_lower, small_upper, 1000), z = diff_numer, Geom.contour)
 
 
-solve_max(diff_poly, [(small_lower, small_upper), (small_lower, small_upper)])
+asdd = Poly1([1,2,3])
+asdd2 = Poly1([1,2,3])
+asdd == asdd2
 
 f_poly = diff_poly
 function diff_enum(x::Vector)
