@@ -166,7 +166,7 @@ immutable PolyProd
 end
 
 function to_string(pp :: PolyProd)
-  ret = string(pp.c, "*")
+  ret = string("(",pp.c,")", "*")
   prods = [string("(",to_string(pp.polys[var_name],var_name),")")
            for var_name in pp.var_order]
   prods_str = reduce((x,y)->string(x,"*",y), prods)
@@ -187,6 +187,19 @@ function peval(pp :: PolyProd, args :: Array{Float64})
     ret *= peval(pp.polys[pp.var_order[i]], args[i])
   end
   ret
+end
+
+# substitutation
+function psub(pp :: PolyProd, var_name, var_value)
+  subbed_poly = pp.polys[var_name]
+  subbed_value = peval(subbed_poly, var_value)
+  c = pp.c * subbed_value
+  var_order = filter(x->(x!=var_name), pp.var_order)
+  polys = Dict{ASCIIString, Poly1}()
+  for v in var_order
+    polys[v] = pp.polys[v]
+  end
+  PolyProd(c, var_order, polys)
 end
 
 function peval(pp :: PolyProd, asmts :: Dict{ASCIIString, Float64})
@@ -292,6 +305,12 @@ function degenerate(spp :: SumPolyProd)
   reduce(|, [degenerate(pp) for pp in spp.polyprods])
 end
 
+function psub(spp :: SumPolyProd, var_name, var_value)
+  var_order = filter(x->x!=var_name, spp.var_order)
+  polyprods = [psub(pp, var_name, var_value) for pp in spp.polyprods]
+  SumPolyProd(var_order, polyprods)
+end
+
 # try to successively add to a list of PolyProd while reducing like-terms
 function add_polyprod!(pp1 :: PolyProd, pplist :: Array{PolyProd})
   for i in 1:length(pplist)
@@ -320,6 +339,33 @@ function peval(spp :: SumPolyProd, asmts :: Dict{ASCIIString, Float64})
   ret = 0
   for pp in spp.polyprods
     ret += peval(pp, asmts)
+  end
+  ret
+end
+
+# give a spp and an initial domain, give all the tuple of
+# partiall evaluated function and the domain it still has free
+# variable over
+function get_all_function_doms(spp::SumPolyProd, dom)
+  var_order = spp.var_order
+  dic_dom = Dict{typeof(var_order[1]), typeof(dom[1])}()
+  for i in 1:length(dom)
+    dic_dom[var_order[i]] = dom[i]
+  end
+  ret = [(spp, dic_dom)]
+  for i in 1:length(var_order)
+    to_add = typeof(ret[1])[]
+    v_name = var_order[i]
+    v_low, v_high = dom[i]
+    for (spp1, dom1) in ret
+      dom_new = Dict{typeof(var_order[1]), typeof(dom[1])}()
+      for key in filter(x->x!=v_name, keys(dom1))
+        dom_new[key] = dom1[key]
+      end
+      push!(to_add, (psub(spp1, v_name, v_low), dom_new))
+      push!(to_add, (psub(spp1, v_name, v_high), dom_new))
+    end
+    ret = [ret, to_add]
   end
   ret
 end
