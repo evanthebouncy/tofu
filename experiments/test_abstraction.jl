@@ -13,14 +13,85 @@ function drawStuff(doms)
        Geom.rectbin)
 end
 
-dom_small = [(-1.0, 0), (0, 1.0)]
+dom_small = [(-1.0, 2.0), (0, 1.0)]
 dom_large = [(-2.0, 0), (0, 2.0)]
+dom_large = [(-1.5,-1.375),(1.0,1.0625)]
 dom_x = linspace(dom_small[1][1], dom_small[1][2], 1000)
 dom_y = linspace(dom_small[2][1], dom_small[2][2], 1000)
 
-neg_potential = get_potential_from_dist(neg_dist)
+le_potential = get_potential_from_dist(le_dist)
+lower_poly, upper_poly = get_poly_lower_upper(le_potential, ["x", "y"], dom_small, 1, "approx")
+lower_poly.c
+
+plot(z=(x,y)->peval(lower_poly,[x,y]), x=dom_x, y=dom_y, Geom.contour)
+plot(z=(x,y)->peval(upper_poly,[x,y]), x=dom_x, y=dom_y, Geom.contour)
+
+lower_poly_exact, upper_poly_exact = get_poly_lower_upper(le_potential, ["x", "y"], dom_small, 1, "exact")
+lower_poly.c
+lower_poly_exact.c
+upper_poly.c
+upper_poly_exact.c
+
+pbounds_phc(lower_poly.spp, [(-1.5,-1.375),(1.0,1.0625)])
+neg_potential.potential_bnd([(-1.5,-1.375),(1.0,1.0625)])
+
+upper_poly.c
+lower_poly.c
+
+plot(z=neg_potential.potential_fun, x=dom_x, y=dom_y, Geom.contour)
+
 poly_apx = get_m_projections_approx(neg_potential.potential_fun, ["x", "y"], 5, dom_large)
 poly_apx2 = get_m_projections_approx(neg_potential.potential_fun, ["x", "y"], 5, dom_small)
+partialx = δ(poly_apx2, "x")
+partialy = δ(poly_apx2, "y")
+partialx_std = SumPolyProd_to_STDPoly(partialx)
+peval(partialx_std, [-0.2, 0.7])
+partialy_std = SumPolyProd_to_STDPoly(partialy)
+partialx_str = to_string(partialx_std)
+partialy_str = to_string(partialy_std)
+print(partialx_str)
+print(partialy_str)
+
+run(`source ~/.bashrc`)
+
+tryx = -6.84631296628350E-02
+tryy =  6.81040077990486E-01
+peval(partialx, [tryx, tryy])
+peval(partialy, [tryx, tryy])
+
+get_bound_object(poly_apx2)(dom_small)
+get_bound_object(δ(poly_apx2, "x"))(split_half(dom_small)[1])
+asdf1, bcd1 = get_max_value(get_bound_object(δ(poly_apx2, "x")), dom_small)
+asdf1
+drawStuff(keys(bcd1))
+
+partialx = δ(poly_apx2, "x")
+plot(z=(x,y)->peval(partialx,[x,y]), x=dom_x, y=dom_y, Geom.contour)
+
+plot(z=(x,y)->peval(poly_apx2,[x,y]), x=dom_x, y=dom_y, Geom.contour)
+
+
+all_partials = SumPolyProd[δ(poly_apx2, x) for x in poly_apx2.var_order]
+all_partials_bnd_obj = [get_bound_object(spp1) for spp1 in all_partials]
+asdf2, bcd2 = get_max_value(get_bound_object(poly_apx2), dom_small, all_partials_bnd_obj)
+
+get_bound_object(δ(poly_apx2, "y"))(dom_small)
+124 / (500 ^ 0.5)
+neg_potential.potential_bnd(dom_small)
+
+plot(z=(x,y)->peval(poly_apx2,[x,y]), x=dom_x, y=dom_y, Geom.contour)
+
+diffz(x,y) = neg_potential.potential_fun(x,y) - peval(poly_apx2, [x,y])
+plot(z=diffz, x=dom_x, y=dom_y, Geom.contour)
+
+poly_bounder = get_bound_object(poly_apx2)
+function diff_bound(dom)
+  a,b = poly_bounder(dom)
+  c,d = neg_potential.potential_bnd(dom)
+  b - c, d - a
+end
+asdf1, bcd1 = get_max_value(diff_bound, dom_small)
+asdf1
 
 poly_diff = poly_apx - poly_apx2
 all_partials = SumPolyProd[δ(poly_diff, x) for x in poly_diff.var_order]
@@ -30,7 +101,9 @@ asdf1, bcd1 = get_max_value(diff_bound_poly, dom_small)
 asdf2, bcd2 = get_max_value(diff_bound_poly, dom_small, all_partials_bnd_obj)
 drawStuff(keys(bcd1))
 
-asdf
+drawStuff(keys(bcd2))
+
+
 poly_bnd = get_bound_object(poly_apx)
 poly_bnd(dom_small)
 diff_fun(x,y) = peval(poly_apx, [x,y]) - neg_potential.potential_fun(x,y)

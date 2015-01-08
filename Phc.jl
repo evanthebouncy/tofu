@@ -24,12 +24,17 @@ function read_roots(num_var)
     for sol in sol_str
       splitted = split(sol, r" |\n")
       splitted = filter(x->length(x)>0, splitted)
-      rl_part = float64(splitted[3])
-      im_part = float64(splitted[4])
-      ret[splitted[1]] = (rl_part, im_part)
+      try
+        rl_part = float64(splitted[3])
+        im_part = float64(splitted[4])
+        ret[splitted[1]] = (rl_part, im_part)
+      catch
+      end
+
     end
     ret
   end
+  close(fd_read)
   [get_1_sol(solz) for solz in sols_strs]
 end
 

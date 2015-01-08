@@ -2,6 +2,8 @@
 # a domain is simply a list of tuples denoting lower/upper bound
 # over a box
 
+typealias Domain Array{(Float64,Float64),1}
+
 # divide a domain in half along the greatest axis
 function split_half(dom)
   dom_w_length = [(d[2]-d[1],d) for d in dom]
@@ -35,6 +37,42 @@ end
 function get_single_sample(dom1)
   left_end = [x[1] for x in dom1]
   lengthz  = [x[2]-x[1] for x in dom1]
-  [left_end[i] + rand() * lengthz[i] for i in 1:length(dom1)]
+  Float64[left_end[i] + rand() * lengthz[i] for i in 1:length(dom1)]
 end
 
+
+# check if dom contains a point
+function dom_contains(dom, pt)
+  assert(length(dom) == length(pt))
+  for i in 1:length(pt)
+    x = pt[i]
+    x_bnd_low, x_bnd_high = dom[i]
+    if !(x_bnd_low <= x <= x_bnd_high)
+      return false
+    end
+  end
+  return true
+end
+
+
+# function intersect_var(d1 :: DicDomain, d2 :: DicDomain)
+#   var1, var2 = keys(d1), keys(d2)
+#   filter(x->x in var2, var1)
+# end
+
+# function has_intersect(d1 :: DicDomain, d2 :: DicDomain)
+#   length(intersect_var(d1, d2)) > 0
+# end
+
+# # check if dom contains a point
+# function dom_contains(dom :: DicDomain, pt)
+#   assert(length(dom) == length(pt))
+#   for i in 1:length(pt)
+#     x = pt[i]
+#     x_bnd_low, x_bnd_high = dom[i]
+#     if !(x_bnd_low <= x <= x_bnd_high)
+#       return false
+#     end
+#   end
+#   return true
+# end

@@ -1,6 +1,20 @@
 using Iterators
 using Optim
 include("/home/evan/Documents/research/tofu/Domain.jl")
+include("/home/evan/Documents/research/tofu/Phc.jl")
+
+# ==================== something that should be put later but we'll fix it later
+immutable STDPolyTerm
+  c :: Float64
+  var_order :: Array{ASCIIString}
+  term :: Dict{ASCIIString, Int64}
+end
+
+immutable STDPoly
+  var_order :: Array{ASCIIString}
+  terms :: Array{STDPolyTerm}
+end
+
 
 # ============= POLYNOMIALS ===============
 
@@ -346,7 +360,7 @@ end
 # give a spp and an initial domain, give all the tuple of
 # partiall evaluated function and the domain it still has free
 # variable over
-function get_all_function_doms(spp::SumPolyProd, dom)
+function get_all_function_doms(spp::Union(SumPolyProd,STDPoly), dom)
   var_order = spp.var_order
   dic_dom = Dict{typeof(var_order[1]), typeof(dom[1])}()
   for i in 1:length(dom)
@@ -362,12 +376,44 @@ function get_all_function_doms(spp::SumPolyProd, dom)
       for key in filter(x->x!=v_name, keys(dom1))
         dom_new[key] = dom1[key]
       end
-      push!(to_add, (psub(spp1, v_name, v_low), dom_new))
-      push!(to_add, (psub(spp1, v_name, v_high), dom_new))
+      push!(to_add, (psub(spp1, v_name, v_low), merge(dom_new,[v_name => (v_low,v_low)]) ))
+      push!(to_add, (psub(spp1, v_name, v_high), merge(dom_new,[v_name => (v_high,v_high)])))
     end
     ret = [ret, to_add]
   end
   ret
+end
+
+function get_critical_pts_phc(spp :: Union(SumPolyProd,STDPoly), orig_var_order, dic_dom)
+  function is_real(solution)
+    for (rls, ims) in values(solution)
+      if ims > 1e-10
+        return false
+      end
+    end
+    return true
+  end
+  if length(spp.var_order) == 0
+    Array{Float64}[ [dic_dom[vname][1] for vname in orig_var_order] ]
+  else
+    ret = Array{Float64}[]
+    system_polys = [δ(spp, vname) for vname in spp.var_order]
+    solutions = solve_system(system_polys)
+    for solution in solutions
+      if is_real(solution)
+        to_add = Float64[]
+        for vname in orig_var_order
+          if vname in keys(solution)
+            push!(to_add, solution[vname][1])
+          else
+            push!(to_add, dic_dom[vname][1])
+          end
+        end
+        push!(ret, to_add)
+      end # if is_real
+    end #for solution ...
+    ret
+  end
 end
 
 # give a spp, the root of its derivitives, and a domain
@@ -377,6 +423,20 @@ function pbounds(spp::SumPolyProd, root_dict, dom)
   minval = reduce(+, map(x->x[1], values))
   maxval = reduce(+, map(x->x[2], values))
   minval, maxval
+end
+
+function pbounds_phc(spp :: Union(SumPolyProd, STDPoly), dom)
+  orig_var_order = spp.var_order
+  all_func_doms = get_all_function_doms(spp, dom)
+  crit_pts = Array{Float64}[]
+  for (spp_func, dic_dom) in all_func_doms
+    new_crit_pts = get_critical_pts_phc(spp_func, orig_var_order, dic_dom)
+    crit_pts = [crit_pts, new_crit_pts]
+  end
+  filtered_crit_pts = filter(pt->dom_contains(dom,pt), crit_pts)
+  filtered_crit_pts
+  crit_values = [peval(spp, crit_pt) for crit_pt in filtered_crit_pts]
+  min(crit_values...), max(crit_values...)
 end
 
 # given a spp, create a bound object that, when taking in a domain
@@ -701,11 +761,7 @@ end
 # ============ The STD basis for polynomials =======================
 # ============ Useful for finding differences of polynomials =======
 
-immutable STDPolyTerm
-  c :: Float64
-  var_order :: Array{ASCIIString}
-  term :: Dict{ASCIIString, Int64}
-end
+
 
 function to_string(std_term :: STDPolyTerm)
   ret = string("(", std_term.c)
@@ -751,6 +807,18 @@ function * (term1 :: STDPolyTerm, term2 :: STDPolyTerm)
   STDPolyTerm(c, var_order, term)
 end
 
+# TODO: take dervitive on a term that's a constant should yield 0
+# TODO, URGENT ERROR: take deritive against x does _not_ destroy x...
+function δ (term1 :: STDPolyTerm, var_name)
+  var_order = filter(x->x!=var_name, term1.var_order)
+  c = term1.c * (term1.term[var_name])
+  term = Dict{ASCIIString, Int64}()
+  for v_n in var_order
+    term[v_n] = term1.term[v_n]
+  end
+  STDPolyTerm(c, var_order, term)
+end
+
 function peval(term::STDPolyTerm, lst_vals::Array{Float64})
   assert(length(lst_vals) == length(term.var_order))
   ret = term.c
@@ -777,10 +845,17 @@ function peval(term::STDPolyTerm, lst_asmt::Dict{ASCIIString,Float64})
   ret
 end
 
-immutable STDPoly
-  var_order :: Array{ASCIIString}
-  terms :: Array{STDPolyTerm}
+function psub(pterm::STDPolyTerm, var_name, var_value)
+  # term without the variable is invariant under psub
+  if !(var_name in pterm.var_order)
+    return pterm
+  end
+  var_order = filter(x->x!=var_name, pterm.var_order)
+  c = pterm.c * var_value^pterm.term[var_name]
+  term = [vn => pterm.term[vn] for vn in var_order]
+  STDPolyTerm(c, var_order, term)
 end
+
 
 function to_string(std_poly :: STDPoly)
   term_lst = [to_string(term) for term in std_poly.terms]
@@ -843,6 +918,28 @@ function * (p1 :: STDPoly, p2 :: STDPoly)
   end
   STDPoly(var_order, terms)
 end
+
+function δ (p1 :: STDPoly, var_name)
+  var_order = filter(x->x!=var_name, p1.var_order)
+  terms = STDPolyTerm[]
+  delta_ed_terms = [δ(term, var_name) for term in p1.terms]
+  for t in delta_ed_terms
+    add1!(terms, t)
+  end
+  STDPoly(var_order, terms)
+end
+
+function psub(p::STDPoly, var_name, var_value)
+  var_order = filter(x->x!=var_name, p.var_order)
+  terms_raw = [psub(pterm, var_name, var_value) for pterm in p.terms]
+  terms = STDPolyTerm[]
+  for t in terms_raw
+    add1!(terms, t)
+  end
+  STDPoly(var_order, terms)
+end
+
+
 
 # convert SumPolyProd to STDPoly
 # one at a time
