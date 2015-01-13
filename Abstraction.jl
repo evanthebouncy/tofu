@@ -108,7 +108,6 @@ end
 # get the polynomial lower and upper bound over a domain for a potential f
 # return a pair of SumPolyProdC object
 function get_poly_lower_upper(f :: Potential, var_order, dom, degree, bnd_method="exact")
-  @show(dom)
   spp_approx = get_m_projections_approx(f.potential_fun, var_order, degree, dom)
 
   function bound_diff(dom)

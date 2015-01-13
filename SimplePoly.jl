@@ -309,6 +309,12 @@ immutable SumPolyProd
   polyprods :: Array{PolyProd}
 end
 
+function make_zero(spp :: SumPolyProd)
+  var_order = spp.var_order
+  polyprods = PolyProd[]
+  SumPolyProd(var_order, polyprods)
+end
+
 function to_string(spp :: SumPolyProd)
   pp_strs = [to_string(pp) for pp in spp.polyprods]
   pp_str = reduce((x,y)->string(x,"+",y), pp_strs)
@@ -344,7 +350,12 @@ function peval(spp :: SumPolyProd, args :: Array{Float64})
   assert(length(args) == length(spp.var_order))
   ret = 0
   for pp in spp.polyprods
-    ret += peval(pp, args)
+    if (spp.var_order == pp.var_order)
+      ret += peval(pp, args)
+    else
+      restricted_arg = Float64[args[i] for i in [findfirst(spp.var_order, v2) for v2 in pp.var_order]]
+      ret += peval(pp, restricted_arg)
+    end
   end
   ret
 end
@@ -730,12 +741,37 @@ function peval(sppc :: SumPolyProdC, x)
   peval(sppc.spp, x) + sppc.c
 end
 
+function make_zero(sppc :: SumPolyProdC)
+  SumPolyProdC(make_zero(sppc.spp), 0.0)
+end
+
 # basic arithmantic operations on SPPC
 function + (sppc1 :: SumPolyProdC, sppc2 :: SumPolyProdC)
   spp = sppc1.spp + sppc2.spp
   c = sppc1.c + sppc2.c
   SumPolyProdC(spp, c)
 end
+
+function + (sppc1 :: SumPolyProdC, spp2 :: SumPolyProd)
+  spp = sppc1.spp + spp2
+  c = sppc1.c
+  SumPolyProdC(spp, c)
+end
+
+function + (spp2 :: SumPolyProd, sppc1 :: SumPolyProdC)
+  sppc1 + spp2
+end
+
+function - (sppc :: SumPolyProdC)
+  spp = -sppc.spp
+  c = -sppc.c
+  SumPolyProdC(spp, c)
+end
+
+function - (spp_c1 :: Union(SumPolyProdC, SumPolyProd), spp_c2 :: Union(SumPolyProdC, SumPolyProd))
+  spp_c1 + (-spp_c2)
+end
+
 
 function * (sppc1 :: SumPolyProdC, sppc2 :: SumPolyProdC)
   spp1, spp2 = sppc1.spp, sppc2.spp
@@ -750,6 +786,10 @@ function ∫ (sppc :: SumPolyProdC, x :: ASCIIString, a, b)
   spp_int = ∫(spp, x, a, b)
   c_int = c * (b - a)
   SumPolyProdC(spp_int, c_int)
+end
+
+function δ (sppc :: SumPolyProdC, x :: ASCIIString)
+  δ(sppc.spp, x)
 end
 
 function get_bound_object(sppc :: SumPolyProdC)
