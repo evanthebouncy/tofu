@@ -179,6 +179,11 @@ immutable PolyProd
   polys :: Dict{ASCIIString, Poly1}
 end
 
+function piszero(pp :: PolyProd)
+  ret = (pp.c == 0) | (length(pp.var_order) == 0)
+  ret
+end
+
 function to_string(pp :: PolyProd)
   ret = string("(",pp.c,")", "*")
   prods = [string("(",to_string(pp.polys[var_name],var_name),")")
@@ -282,7 +287,7 @@ function * (c1 :: Float64, pp1 :: PolyProd)
   PolyProd(c, var_order, polys)
 end
 
-function ∫ (pp :: PolyProd, x, a, b)
+function ∫ (pp :: PolyProd, x::ASCIIString, a, b)
   assert(x in pp.var_order)
   poly1 = pp.polys[x]
   poly1_int = ∫(poly1)
@@ -497,7 +502,10 @@ function * (spp1 :: SumPolyProd, spp2 :: SumPolyProd)
   polyprods = PolyProd[]
   for pp1 in spp1.polyprods
     for pp2 in spp2.polyprods
-      push!(polyprods, pp1 * pp2)
+      # if both are non zero
+      if !piszero(pp1) & !piszero(pp2)
+        push!(polyprods, pp1 * pp2)
+      end
     end
   end
   SumPolyProd(var_order, polyprods)
@@ -515,8 +523,10 @@ function ∫ (spp :: SumPolyProd, x :: ASCIIString, a, b)
   var_order = filter(name->(name != x), spp.var_order)
   polyprods = PolyProd[]
   for polyprod in spp.polyprods
-    to_add = ∫(polyprod, x, a, b)
-    add_polyprod!(to_add, polyprods)
+    if !piszero(polyprod)
+      to_add = ∫(polyprod, x, a, b)
+      add_polyprod!(to_add, polyprods)
+    end
   end
   SumPolyProd(var_order, polyprods)
 end

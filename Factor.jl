@@ -43,10 +43,12 @@ function lowest_possible(sppc :: SumPolyProdC, dom, bnd_method="exact")
 end
 
 # make a factor from a potential function
-function make_factor(pot :: Potential, p :: Partition, var_order, bnd_method="exact")
+function make_factor(pot :: Potential, p :: Partition, var_order, bnd_method="exact", deg=2)
   potential_bounds = Dict{Domain, (SumPolyProdC, SumPolyProdC)}()
+  cnt = 0
   for dom in p
-    lower_poly, upper_poly = get_poly_lower_upper(pot, var_order, dom, 2, bnd_method)
+    cnt += 1
+    lower_poly, upper_poly = get_poly_lower_upper(pot, var_order, dom, deg, bnd_method)
     lowest_of_lower = lowest_possible(lower_poly, dom, bnd_method)
     lower_poly = (if lowest_of_lower < 0.0
                     make_zero(lower_poly)
@@ -61,7 +63,7 @@ function make_factor(pot :: Potential, p :: Partition, var_order, bnd_method="ex
 end
 
 # make a factor by having a different partition (maybe coarser)
-function abstract_factor(f :: Factor, p :: Partition, bnd_method="exact")
+function abstract_factor(f :: Factor, p :: Partition, bnd_method="exact", deg=2)
   lower_fun(x...) = feval_lower(f, [x...])
   upper_fun(x...) = feval_upper(f, [x...])
   var_order = f.var_order
@@ -69,8 +71,8 @@ function abstract_factor(f :: Factor, p :: Partition, bnd_method="exact")
   potential_bounds = Dict{Domain, (SumPolyProdC, SumPolyProdC)}()
   for dom in p
     # the two spp approximations
-    spp_approx_lower = get_m_projections_approx(lower_fun, var_order, 2, dom)
-    spp_approx_upper = get_m_projections_approx(upper_fun, var_order, 2, dom)
+    spp_approx_lower = get_m_projections_approx(lower_fun, var_order, deg, dom)
+    spp_approx_upper = get_m_projections_approx(upper_fun, var_order, deg, dom)
 
     # try to figure out how to shift those 2 approximations to get sound results
     intersected_doms = filter(x->has_intersect(x,dom), keys(f.potential_bounds))
@@ -138,7 +140,7 @@ function * (f1 :: Factor, f2 :: Factor)
   Factor(var_order, potential_bounds)
 end
 
-function ∫ (f :: Factor, inte_var_name)
+function ∫ (f :: Factor, inte_var_name :: ASCIIString)
   var_order = filter(x->x!=inte_var_name, f.var_order)
   # project the partition on f into a lower dimension while keeping track of where each new domain in the partition
   # is an intersection of what in the old place
@@ -148,8 +150,9 @@ function ∫ (f :: Factor, inte_var_name)
   for s_dom in keys(f.potential_bounds)
     lower, upper = f.potential_bounds[s_dom]
     bound_left, bound_right = s_dom[findfirst(f.var_order, inte_var_name)]
-    cached_int_potential_bounds[s_dom] = (∫(lower, inte_var_name, bound_left, bound_right),
-                                          ∫(upper, inte_var_name, bound_left, bound_right) )
+    lower_poly_bnd = ∫(lower, inte_var_name, bound_left, bound_right)
+    upper_poly_bnd = ∫(upper, inte_var_name, bound_left, bound_right)
+    cached_int_potential_bounds[s_dom] = (lower_poly_bnd, upper_poly_bnd)
   end
 
   potential_bounds = Dict{Domain, (SumPolyProdC, SumPolyProdC)}()

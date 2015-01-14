@@ -94,7 +94,9 @@ function get_max_value_approx(diff_func :: Function, dom, f_d = None)
 
   function try_once()
     try
-      fminbox(ddf, get_single_sample(dom), Float64[x[1] for x in dom], Float64[x[2] for x in dom]).f_minimum
+      xtol = max_length(dom) / 100
+      ret = fminbox(ddf, get_single_sample(dom), Float64[x[1] for x in dom], Float64[x[2] for x in dom], xtol=xtol).f_minimum
+      ret
     catch
       spp_enum(get_single_sample(dom))
     end
