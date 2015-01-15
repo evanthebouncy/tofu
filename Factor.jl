@@ -1,66 +1,78 @@
 include("/home/evan/Documents/research/tofu/Abstraction.jl")
+type Patch
+  dom :: Domain
+  p_l :: SumPolyProdC
+  p_u :: SumPolyProdC
+  parents :: Array{Domain}
+end
+
 type Factor
   var_order
-  potential_bounds :: Dict{Domain, (SumPolyProdC, SumPolyProdC)}
+  cover_dom :: Domain
+  partition :: Partition
+  potential_bounds :: Dict{Domain, Patch}
 end
 
 function feval_lower(f :: Factor, x)
-  for dom in keys(f.potential_bounds)
+  for dom in f.partition
     if dom_contains(dom, x)
-      return peval(f.potential_bounds[dom][1], x)
+      return peval(f.potential_bounds[dom].p_l, x)
     end
   end
   assert(false)
 end
 
 function feval_upper(f :: Factor, x)
-  for dom in keys(f.potential_bounds)
+  for dom in f.partition
     if dom_contains(dom, x)
-      return peval(f.potential_bounds[dom][2], x)
+      return peval(f.potential_bounds[dom].p_u, x)
     end
   end
   assert(false)
 end
 
-# give the smallest possible value, used to detect if something goes below 0
-function lowest_possible(sppc :: SumPolyProdC, dom, bnd_method="exact")
-  # sign is reversed for this
-  function lower_bound_lower_poly(dom)
-    Lp, Up = pbounds_phc(sppc.spp, dom)
-    -1.0 * (Lp - sppc.c)
-  end
-
-  # sign is reversed for this as well
-  lower_poly_enum(x) = -1.0 * peval(sppc, [x...])
-
-  lowest_of_lower = (if bnd_method == "exact"
-                       -1.0 * get_max_value_exact(lower_bound_lower_poly, dom)
-                     else
-                       -1.0 * get_max_value_approx(lower_poly_enum, dom)
-                     end
-                     )
-  lowest_of_lower
+# make a patch from a potential function
+function patch_pot(var_order, dom :: Domain, pot :: Potential, bnd_method, deg)
+  lower_poly, upper_poly = get_poly_lower_upper(pot, var_order, dom, deg, bnd_method)
+  lowest_of_lower = lowest_possible(lower_poly, dom, bnd_method)
+  lower_poly = (if lowest_of_lower < -1e-6
+                  make_zero(lower_poly)
+                else
+                  lower_poly
+                end
+                )
+  Patch(dom, lower_poly, upper_poly, Domain[])
 end
 
 # make a factor from a potential function
-function make_factor(pot :: Potential, p :: Partition, var_order, bnd_method="exact", deg=2)
-  potential_bounds = Dict{Domain, (SumPolyProdC, SumPolyProdC)}()
-  cnt = 0
+function make_factor(pot :: Potential, cover_dom :: Domain, p :: Partition, var_order, bnd_method="exact", deg=2)
+  potential_bounds = Dict{Domain, Patch}()
   for dom in p
-    cnt += 1
-    lower_poly, upper_poly = get_poly_lower_upper(pot, var_order, dom, deg, bnd_method)
-    lowest_of_lower = lowest_possible(lower_poly, dom, bnd_method)
-    lower_poly = (if lowest_of_lower < 0.0
-                    make_zero(lower_poly)
-                  else
-                    lower_poly
-                  end
-                  )
-
-    potential_bounds[dom] = lower_poly, upper_poly
+    potential_bounds[dom] = patch_pot(var_order, dom, pot, bnd_method, deg)
   end
-  Factor(var_order, potential_bounds)
+  Factor(var_order, cover_dom, p, potential_bounds)
 end
+
+# grow a factor from a potential function
+function pot_grow!(pot :: Potential, f :: Factor, dom :: Domain, bnd_method="exact", deg=2)
+  assert(dom in f.partition)
+  # shatter the domain to grow on
+  shattered_doms = rec_split_half(dom, length(f.var_order))
+  # remove the domain from the partition
+  setdiff!(f.partition, Domain[dom])
+  # add the shattered domain to the partition
+  union!(f.partition, shattered_doms)
+  # add the patches for the shattered domains
+  for d1 in shattered_doms
+    f.potential_bounds[d1] = patch_pot(f.var_order, d1, pot, bnd_method, deg)
+  end
+end
+
+function rand_pot_grow!(pot :: Potential, f :: Factor, bnd_method="exact", deg=2)
+  dom_to_grow = find_split_dom(f.cover_dom, f.partition)
+  pot_grow!(pot, f, dom_to_grow, bnd_method, deg)
+end
+
 
 # make a factor by having a different partition (maybe coarser)
 function abstract_factor(f :: Factor, p :: Partition, bnd_method="exact", deg=2)
@@ -120,6 +132,28 @@ function abstract_factor(f :: Factor, p :: Partition, bnd_method="exact", deg=2)
     potential_bounds[dom] = lower_poly, upper_poly
   end
   Factor(var_order, potential_bounds)
+end
+
+# give a domain, and 2 factors f1 and f2
+function patch_mult (var_order, dom :: Domain, f1 :: Factor, f2 :: Factor)
+  shrink1 = diminish_dom_dim(var_order, f1.var_order, dom)
+  shrink2 = diminish_dom_dim(var_order, f2.var_order, dom)
+  @show(dom, shrink1, shrink2)
+  best_cover1 = best_covering(shrink1, keys(f1.potential_bounds))
+  best_cover2 = best_covering(shrink2, keys(f2.potential_bounds))
+  @show(best_cover1, best_cover2)
+  p_l = f1.potential_bounds[best_cover1].p_l * f2.potential_bounds[best_cover2].p_l
+  p_u = f1.potential_bounds[best_cover1].p_u * f2.potential_bounds[best_cover2].p_u
+  Patch(dom, p_l, p_u, Domain[best_cover1, best_cover2])
+end
+
+function f_mult(f1 :: Factor, f2 :: Factor, p :: Partition)
+  var_order = merge_varorder(f1.var_order, f2.var_order)
+  potential_bounds = Dict{Domain, Patch}()
+  for dom in p
+    potential_bounds[dom] = patch_mult(var_order, dom, f1, f2)
+  end
+  Factor(var_order, p, potential_bounds)
 end
 
 function * (f1 :: Factor, f2 :: Factor)

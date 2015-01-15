@@ -142,3 +142,24 @@ function get_poly_lower_upper(f :: Potential, var_order, dom, degree, bnd_method
 
   SumPolyProdC(spp_approx, -1.0 * shift_down), SumPolyProdC(spp_approx, shift_up)
 end
+
+
+# give the smallest possible value, used to detect if something goes below 0
+function lowest_possible(sppc :: SumPolyProdC, dom, bnd_method="exact")
+  # sign is reversed for this
+  function lower_bound_lower_poly(dom)
+    Lp, Up = pbounds_phc(sppc.spp, dom)
+    -1.0 * (Lp - sppc.c)
+  end
+
+  # sign is reversed for this as well
+  lower_poly_enum(x) = -1.0 * peval(sppc, [x...])
+
+  lowest_of_lower = (if bnd_method == "exact"
+                       -1.0 * get_max_value_exact(lower_bound_lower_poly, dom)
+                     else
+                       -1.0 * get_max_value_approx(lower_poly_enum, dom)
+                     end
+                     )
+  lowest_of_lower
+end

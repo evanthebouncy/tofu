@@ -3,7 +3,7 @@
 # over a box
 
 typealias Domain Array{(Float64,Float64),1}
-typealias Partition Array{Domain}
+typealias Partition Set{Domain}
 
 ##### drawing a 2d domain
 function draw_dom2d(doms)
@@ -29,6 +29,20 @@ function split_half(dom)
   ret2 = [x for x in dom]
   ret2[findfirst(ret2, maxd)] = half2
   ret1, ret2
+end
+
+function rec_split_half(dom, n)
+  if n == 0
+    Domain[dom]
+  else
+    ret = Domain[]
+    for d in rec_split_half(dom, n-1)
+      s1, s2 = split_half(d)
+      push!(ret, s1)
+      push!(ret, s2)
+    end
+    ret
+  end
 end
 
 function has_intersect(dom1, dom2)
@@ -59,14 +73,19 @@ function get_intersect(dom1, dom2)
   (Float64, Float64)[get_interval_intersect(dom1[i], dom2[i]) for i in 1:length(dom1)]
 end
 
+# returns true if dom1 is a subset of dom2
+function dom_subset(dom1, dom2)
+  get_intersect(dom1, dom2) == dom1
+end
+
 # p1 and p2 are both partitions of some domain
 # give the intersection/overlaps of these 2 partitions
 function partition_intersect(p1, p2)
-  ret = Domain[]
+  ret = Set{Domain}()
   for d1 in p1
     for d2 in p2
       if has_intersect(d1, d2)
-        push!(ret, get_intersect(d1, d2))
+        union!(ret, get_intersect(d1, d2))
       end
     end
   end
@@ -93,7 +112,7 @@ end
 
 # get the largest axis length of the domain
 function max_length(dom)
-  max([d[2]-d[1] for d in dom]...)
+  max([d[2]-d[1] for d in dom]..., 0.0)
 end
 
 # get the euclidian diagnal dist
@@ -109,7 +128,6 @@ function get_single_sample(dom1)
   Float64[left_end[i] + rand() * lengthz[i] for i in 1:length(dom1)]
 end
 
-
 # check if dom contains a point
 function dom_contains(dom, pt)
   assert(length(dom) == length(pt))
@@ -123,23 +141,27 @@ function dom_contains(dom, pt)
   return true
 end
 
-# generarte a semi-random partition from an initial domain
-function gen_test_partition(dom_init, n_splits)
-  ret = Domain[dom_init]
-  function find_split_idx()
-    rnd_pt = get_single_sample(dom_init)
-    for j in 1:length(ret)
-      if dom_contains(ret[j], rnd_pt)
-        return j
-      end
+function find_split_dom(dom_init :: Domain, p :: Partition)
+  rnd_pt = get_single_sample(dom_init)
+  for dom in p
+    if dom_contains(dom, rnd_pt)
+      return dom
     end
-    return 1
   end
+  dom_init
+end
+
+# generarte a semi-random partition from an initial domain
+function gen_test_partition(dom_init::Domain, n_splits)
+  ret = Set{Domain}(Domain[dom_init])
+      @show(typeof(ret), Partition)
   for i in 1:n_splits
-    to_split = splice!(ret, find_split_idx())
+    #assert(typeof(ret) == Partition)
+    to_split = find_split_dom(dom_init, ret)
+    setdiff!(ret, Domain[to_split])
     splt1, splt2 = split_half(to_split)
-    push!(ret, splt1)
-    push!(ret, splt2)
+    union!(ret, Domain[splt1])
+    union!(ret, Domain[splt2])
   end
   ret
 end
@@ -166,6 +188,21 @@ function diminish_dom_dim(old_var_order, new_var_order, old_dom)
     push!(ret, old_dom[idx])
   end
   ret
+end
+
+# find the most suitable covering of a dom from a set of Doms
+# todo: use binary search for more efficient search
+function best_covering(dom :: Domain, doms)
+  can_cover = filter(x->dom_subset(dom, x), doms)
+  best_length = Inf
+  best_dom = None
+  for d1 in can_cover
+    if max_length(d1) < best_length
+      best_length = max_length(d1)
+      best_dom = d1
+    end
+  end
+  best_dom
 end
 
 # check if a value slices a domain

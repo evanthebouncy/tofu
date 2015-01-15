@@ -52,11 +52,16 @@ end
 # convert distances to actual potential functions!
 
 # convert distance into potential
-function dist_to_potential(dist)
+function dist_to_potential_sharp(dist)
   delta = 1.5
   delta_01 = 1 / (1 + 2 ^ (-1*delta))
   amped_err = (1-delta_01 + delta_01*dist) ^ delta
   1.0 / amped_err
+end
+
+# a gaussian version of it
+function dist_to_potential(dist)
+  2.0^(-1.0 * dist^2)
 end
 
 # convert distance into potential bounder
