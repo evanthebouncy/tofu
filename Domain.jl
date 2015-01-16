@@ -299,3 +299,29 @@ function grow_bsp!(bsp :: BSP, old_dom :: Domain, new_dom1 :: Domain, new_dom2 :
   to_grow.left = left
   to_grow.right = right
 end
+
+# for domain of smaller dimension: target_domain
+# find the smallest covering of that domain in the bsp, as a lst of domains
+function find_smallest_cover(bsp :: BSP, target_domain :: Domain, small_var_order, bsp_var_order, inte_var_name)
+  if typeof(bsp.left) == Leaf
+    Domain[bsp.cover_domain]
+  else
+    if bsp.split_var == inte_var_name
+      rec_left = find_smallest_cover(bsp.left, target_domain, small_var_order, bsp_var_order, inte_var_name)
+      rec_right = find_smallest_cover(bsp.right, target_domain, small_var_order, bsp_var_order, inte_var_name)
+      ret = Domain[d for d in rec_left]
+      for d in rec_right
+        push!(ret, d)
+      end
+      ret
+    else
+      left_squished = diminish_dom_dim(bsp_var_order, small_var_order, bsp.left.cover_domain)
+      if dom_subset(target_domain, left_squished)
+        find_smallest_cover(bsp.left, target_domain, small_var_order, bsp_var_order, inte_var_name)
+      else
+        find_smallest_cover(bsp.right, target_domain, small_var_order, bsp_var_order, inte_var_name)
+      end
+    end
+  end
+end
+
