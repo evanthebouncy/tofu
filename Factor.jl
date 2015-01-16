@@ -8,27 +8,48 @@ end
 
 type Factor
   var_order
-  cover_dom :: Domain
+  bsp :: BSP
   partition :: Partition
   potential_bounds :: Dict{Domain, Patch}
 end
 
-function feval_lower(f :: Factor, x)
-  for dom in f.partition
-    if dom_contains(dom, x)
-      return peval(f.potential_bounds[dom].p_l, x)
+# shatter the domain into 2^k pieces where k is the dimension
+# return the resulting domains
+function shatter!(var_order, dom :: Domain, p :: Partition, bsp :: BSP)
+
+  function split_once!(var_order, dom :: Domain, p :: Partition, bsp :: BSP)
+    sp, d1, d2 = split_half(dom)
+    setdiff!(p, Domain[dom])
+    union!(p, Domain[d1, d2])
+    split_var = var_order[sp]
+    split_val = 0.5 * (dom[sp][1] + dom[sp][2])
+    grow_bsp!(bsp, dom, d1, d2, split_var, split_val)
+    Domain[d1, d2]
+  end
+
+  function shatter!_rec(var_order, doms :: Array{Domain}, p :: Partition, bsp :: BSP, n)
+    if n == 0
+      doms
+    else
+      new_doms = Domain[]
+      for d in doms
+        new_doms = [split_once!(var_order, d, p, bsp), new_doms]
+      end
+      shatter!_rec(var_order, new_doms, p, bsp, n - 1)
     end
   end
-  assert(false)
+
+  shatter!_rec(var_order, Domain[dom], p, bsp, length(var_order))
+end
+
+function feval_lower(f :: Factor, x)
+  contained_dom = find_best_containing_domain(f.bsp, x)
+  peval(f.potential_bounds[contained_dom].p_l, x)
 end
 
 function feval_upper(f :: Factor, x)
-  for dom in f.partition
-    if dom_contains(dom, x)
-      return peval(f.potential_bounds[dom].p_u, x)
-    end
-  end
-  assert(false)
+  contained_dom = find_best_containing_domain(f.bsp, x)
+  peval(f.potential_bounds[contained_dom].p_u, x)
 end
 
 # make a patch from a potential function
@@ -45,32 +66,27 @@ function patch_pot(var_order, dom :: Domain, pot :: Potential, bnd_method, deg)
 end
 
 # make a factor from a potential function
-function make_factor(pot :: Potential, cover_dom :: Domain, p :: Partition, var_order, bnd_method="exact", deg=2)
+function f_pot(pot :: Potential, var_order, dom :: Domain, bnd_method="exact", deg=2)
+  bsp = new_leaf(dom)
+  partition = Set{Domain}(Domain[dom])
   potential_bounds = Dict{Domain, Patch}()
-  for dom in p
-    potential_bounds[dom] = patch_pot(var_order, dom, pot, bnd_method, deg)
-  end
-  Factor(var_order, cover_dom, p, potential_bounds)
+  potential_bounds[dom] = patch_pot(var_order, dom, pot, bnd_method, deg)
+  Factor(var_order, bsp, partition, potential_bounds)
 end
 
 # grow a factor from a potential function
-function pot_grow!(pot :: Potential, f :: Factor, dom :: Domain, bnd_method="exact", deg=2)
-  assert(dom in f.partition)
-  # shatter the domain to grow on
-  shattered_doms = rec_split_half(dom, length(f.var_order))
-  # remove the domain from the partition
-  setdiff!(f.partition, Domain[dom])
-  # add the shattered domain to the partition
-  union!(f.partition, shattered_doms)
+function f_pot_grow!(f :: Factor, dom :: Domain, pot :: Potential, bnd_method="exact", deg=2)
+  shattered_doms = shatter!(f.var_order, dom, f.partition, f.bsp)
+
   # add the patches for the shattered domains
   for d1 in shattered_doms
     f.potential_bounds[d1] = patch_pot(f.var_order, d1, pot, bnd_method, deg)
   end
 end
 
-function rand_pot_grow!(pot :: Potential, f :: Factor, bnd_method="exact", deg=2)
-  dom_to_grow = find_split_dom(f.cover_dom, f.partition)
-  pot_grow!(pot, f, dom_to_grow, bnd_method, deg)
+function rand_f_pot_grow!(f :: Factor, pot :: Potential, bnd_method="exact", deg=2)
+  dom_to_grow = find_split_dom(f.bsp.cover_domain, f.partition)
+  f_pot_grow!(f, dom_to_grow, pot, bnd_method, deg)
 end
 
 
@@ -138,22 +154,33 @@ end
 function patch_mult (var_order, dom :: Domain, f1 :: Factor, f2 :: Factor)
   shrink1 = diminish_dom_dim(var_order, f1.var_order, dom)
   shrink2 = diminish_dom_dim(var_order, f2.var_order, dom)
-  @show(dom, shrink1, shrink2)
   best_cover1 = best_covering(shrink1, keys(f1.potential_bounds))
   best_cover2 = best_covering(shrink2, keys(f2.potential_bounds))
-  @show(best_cover1, best_cover2)
   p_l = f1.potential_bounds[best_cover1].p_l * f2.potential_bounds[best_cover2].p_l
   p_u = f1.potential_bounds[best_cover1].p_u * f2.potential_bounds[best_cover2].p_u
   Patch(dom, p_l, p_u, Domain[best_cover1, best_cover2])
 end
 
-function f_mult(f1 :: Factor, f2 :: Factor, p :: Partition)
+function f_mult(f1 :: Factor, f2 :: Factor, cover_dom :: Domain, p :: Partition)
   var_order = merge_varorder(f1.var_order, f2.var_order)
   potential_bounds = Dict{Domain, Patch}()
   for dom in p
     potential_bounds[dom] = patch_mult(var_order, dom, f1, f2)
   end
-  Factor(var_order, p, potential_bounds)
+  Factor(var_order, cover_dom, p, potential_bounds)
+end
+
+# grow a factor from a potential function
+function f_mult_grow!(f :: Factor, dom :: Domain, f1 :: Factor, f2 :: Factor, bnd_method="exact", deg=2)
+  shattered_doms = shatter_partition!(dom, f.partition)
+  for d1 in shattered_doms
+    f.potential_bounds[d1] = patch_mult(f.var_order, d1, f1, f2)
+  end
+end
+
+function rand_f_mult_grow!(f :: Factor, f1 :: Factor, f2 :: Factor, bnd_method="exact", deg=2)
+  dom_to_grow = find_split_dom(f.cover_dom, f.partition)
+  f_mult_grow!(f, dom_to_grow, f1, f2, bnd_method, deg)
 end
 
 function * (f1 :: Factor, f2 :: Factor)
@@ -172,6 +199,10 @@ function * (f1 :: Factor, f2 :: Factor)
     end
   end
   Factor(var_order, potential_bounds)
+end
+
+# give a domain, and the factor it integrates from
+function patch_integrate (var_order, dom :: Domain, f1 :: Factor, inte_var_name)
 end
 
 function ∫ (f :: Factor, inte_var_name :: ASCIIString)
