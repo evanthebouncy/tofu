@@ -325,3 +325,73 @@ function find_smallest_cover(bsp :: BSP, target_domain :: Domain, small_var_orde
   end
 end
 
+# find the contamination of the multiplication
+# a domain is containminated by the source domain if
+# its projection touches the source
+function find_mult_containmenate(src_var_order, mult_var_order, src_dom :: Domain, bsp :: BSP)
+  if typeof(bsp.left) == Leaf
+    Domain[bsp.cover_domain]
+  else
+    # if the split is not in the src var order, we need to include both end
+    if !(bsp.split_var in src_var_order)
+      rec_left = find_mult_containmenate(src_var_order, mult_var_order, src_dom, bsp.left)
+      rec_right = find_mult_containmenate(src_var_order, mult_var_order, src_dom, bsp.right)
+      ret = Domain[d for d in rec_left]
+      for d in rec_right
+        push!(ret, d)
+      end
+      ret
+    else
+      left_squished = diminish_dom_dim(mult_var_order, src_var_order, bsp.left.cover_domain)
+      if dom_subset(left_squished, src_dom)
+        find_mult_containmenate(src_var_order, mult_var_order, src_dom, bsp.left)
+      else
+        find_mult_containmenate(src_var_order, mult_var_order, src_dom, bsp.right)
+      end
+    end
+  end
+end
+
+# find all the containminates and track whom contaiminated whom in a dictionary
+# src_doms is a subset of the partition, and they cannot overlap, as a result...
+# we have the assertion that .. ?
+function find_all_mult_containmenates(src_var_order, mult_var_order, src_doms :: Set{Domain}, bsp :: BSP)
+  ret = Dict(Domain, Set{Domain})()
+  for bad_src in src_doms
+    containminated = find_mult_containmenate(src_var_order, mult_var_order, bad_src, bsp)
+    for cont_dom in containminated
+      if cont_dom in keys(ret)
+        union!(ret[cont_dom], bad_src)
+      else
+        ret[cont_dom] = Set{Domain}(Domain[bad_src])
+      end
+    end
+  end
+  ret
+end
+
+# find the contamination of integration, same idea as above
+function find_inte_containmenate(src_var_order, inte_var_order, inte_var_name, src_dom :: Domain, bsp :: BSP)
+  if typeof(bsp.left) == Leaf
+    Domain[bsp.cover_domain]
+  else
+    # if the split is not in the src var order, we need to include both end
+    if !(bsp.split_var in src_var_order)
+      rec_left = find_mult_containmenate(src_var_order, mult_var_order, src_dom, bsp.left)
+      rec_right = find_mult_containmenate(src_var_order, mult_var_order, src_dom, bsp.right)
+      ret = Domain[d for d in rec_left]
+      for d in rec_right
+        push!(ret, d)
+      end
+      ret
+    # otherwise, we squish the source domain because that is the one that gets squished in integration
+    else
+      source_squished = diminish_dom_dim(src_var_order, inte_var_order, src_dom)
+      if dom_subset(bsp.left.cover_domain, source_squished)
+        find_mult_containmenate(src_var_order, mult_var_order, src_dom, bsp.left)
+      else
+        find_mult_containmenate(src_var_order, mult_var_order, src_dom, bsp.right)
+      end
+    end
+  end
+end

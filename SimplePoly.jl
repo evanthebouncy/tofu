@@ -808,6 +808,17 @@ function get_bound_object(sppc :: SumPolyProdC)
   bounder
 end
 
+# measures error of a patch
+function poly_volume(var_order, dom :: Domain, sppc :: SumPolyProdC)
+  cur_poly = sppc
+  for i in 1:length(var_order)
+    low_end, high_end = dom[i]
+    cur_poly = ∫(cur_poly, var_order[i], low_end, high_end)
+  end
+  peval(cur_poly, Float64[])
+end
+
+
 # ============ The STD basis for polynomials =======================
 # ============ Useful for finding differences of polynomials =======
 

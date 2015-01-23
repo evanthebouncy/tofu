@@ -1,16 +1,75 @@
 include("/home/evan/Documents/research/tofu/Abstraction.jl")
+
+# a patch is a region along with a polynomial lower and upper bound
 type Patch
   dom :: Domain
   p_l :: SumPolyProdC
   p_u :: SumPolyProdC
-  parents :: Array{Domain}
 end
 
+# a factor consist of a variable ordering, a binary_space_tree
+# which has leaves that forms a partition. It also associate each domain in the bsp
+# with a Patch, dictating which lower/upper bound it must provide over that abstraction
 type Factor
   var_order
   bsp :: BSP
   partition :: Partition
   potential_bounds :: Dict{Domain, Patch}
+end
+
+# this keeps relationships between factors as operations Mult, and Inte
+abstract FactorOp
+
+type FactorMult <: FactorOp
+  f1 :: Factor
+  f2 :: Factor
+  f_mult :: Factor
+end
+
+type FactorInte <: FactorOp
+  f1 :: Factor
+  inte_var :: ASCIIString
+  f_inte :: Factor
+end
+
+# this is analegous relationship
+abstract DomainOp
+
+type DomainMult <: DomainOp
+  mult_op :: FactorMult
+  d1 :: Domain
+  d2 :: Domain
+  d_mult :: Domain
+end
+
+type DomainInte <: DomainOp
+  inte_op :: FactorInte
+  d1s :: Array{Domain}
+  d_inte :: Domain
+end
+
+# A collection of Factors and their relationships (and the domain relationships)
+type FactorGraph
+  factors :: Array{Factor}
+  # a mapping between a factor and a FactorOp remembering its parents
+  # e.g. f3 -> FactorMult(f1, f2, f3), i.e. f1 and f2 are parents of f3
+  rel_factor_parents :: Dict{Factor, FactorOp}
+  # a mapping between a factor and a FactorOp remember its child
+  # e.g. f1 -> FactorMult(f1, f2, f3), i.e. f1 has child f3 via a mult with f2
+  rel_factor_child :: Dict{Factor, FactorOp}
+  # a mapping between the pair (Factor,Domain) to the parents whose contribution made
+  # this particular domain in this factor.
+  # e.g. (f3, dom3) -> DomainMult(FactorMult(f1,f2,f3), d1, d2, d3), i.e. (f3, dom3) has parent
+  # d1 from f1, and d2 from f2. Each (fact,dom) can have only one, unique, domainOp associated with it
+  rel_domain_parents :: Dict{(Factor, Domain), DomainOp}
+  # similar as above, except remember its multiple childrens. it is possible for a single (Factor,Domain)
+  # to register multiple DomainOp due to overlapping
+  rel_domain_children :: Dict{(Factor, Domain), Array{DomainOp}}
+end
+
+function init_factor_graph()
+  FactorGraph(Factor[], Dict{Factor,FactorOp}(), Dict{Factor,FactorOp}(),
+              Dict{(Factor,Domain), DomainOp}(), Dict{(Factor,Domain),Array{DomainOp}}())
 end
 
 function feval_lower(f :: Factor, x)
@@ -62,7 +121,7 @@ function patch_pot(var_order, dom :: Domain, pot :: Potential, bnd_method, deg)
                   lower_poly
                 end
                 )
-  Patch(dom, lower_poly, upper_poly, Domain[])
+  Patch(dom, lower_poly, upper_poly)
 end
 
 # make a factor from a potential function
@@ -95,9 +154,11 @@ function patch_mult (var_order, dom :: Domain, f1 :: Factor, f2 :: Factor)
   shrink2 = diminish_dom_dim(var_order, f2.var_order, dom)
   best_cover1 = best_covering(shrink1, keys(f1.potential_bounds))
   best_cover2 = best_covering(shrink2, keys(f2.potential_bounds))
-  p_l = f1.potential_bounds[best_cover1].p_l * f2.potential_bounds[best_cover2].p_l
-  p_u = f1.potential_bounds[best_cover1].p_u * f2.potential_bounds[best_cover2].p_u
-  Patch(dom, p_l, p_u, Domain[best_cover1, best_cover2])
+  patch1, patch2 = f1.potential_bounds[best_cover1], f2.potential_bounds[best_cover2]
+  p_l = patch1.p_l * patch2.p_l
+  p_u = patch1.p_u * patch2.p_u
+  ret = Patch(dom, p_l, p_u)
+  return ret
 end
 
 function f_mult(f1 :: Factor, f2 :: Factor, cover_dom :: Domain)
@@ -105,8 +166,9 @@ function f_mult(f1 :: Factor, f2 :: Factor, cover_dom :: Domain)
   bsp = new_leaf(cover_dom)
   partition = Set{Domain}(Domain[cover_dom])
   potential_bounds = Dict{Domain, Patch}()
-  potential_bounds[cover_dom] = patch_mult(var_order, cover_dom, f1, f2)
-  Factor(var_order, bsp, partition, potential_bounds)
+  ret = Factor(var_order, bsp, partition, potential_bounds)
+  ret.potential_bounds[cover_dom] = patch_mult(var_order, cover_dom, f1, f2)
+  ret
 end
 
 # grow a factor from a multiplication
@@ -142,7 +204,8 @@ function patch_integrate (var_order, dom :: Domain, f1 :: Factor, inte_var_name)
                             reduce((x,y)-> (x[1]+y[1],x[2]+y[2]), integrated_pots)
                           end
                           )
-  Patch(dom, lower_pol, upper_pol, smallest_cover)
+  ret = Patch(dom, lower_pol, upper_pol)
+  ret
 end
 
 function f_inte(f1 :: Factor, inte_var_name :: ASCIIString, cover_dom :: Domain)
@@ -150,8 +213,9 @@ function f_inte(f1 :: Factor, inte_var_name :: ASCIIString, cover_dom :: Domain)
   bsp = new_leaf(cover_dom)
   partition = Set{Domain}(Domain[cover_dom])
   potential_bounds = Dict{Domain, Patch}()
-  potential_bounds[cover_dom] = patch_integrate(var_order, cover_dom, f1, inte_var_name)
-  Factor(var_order, bsp, partition, potential_bounds)
+  ret = Factor(var_order, bsp, partition, potential_bounds)
+  ret.potential_bounds[cover_dom] = patch_integrate(var_order, cover_dom, f1, inte_var_name)
+  ret
 end
 
 # grow a factor from a potential function
@@ -166,6 +230,34 @@ end
 function rand_f_inte_grow!(f :: Factor, f1 :: Factor, inte_var_name :: ASCIIString)
   dom_to_grow = find_split_dom(f.bsp.cover_domain, f.partition)
   f_inte_grow!(f, dom_to_grow, f1, inte_var_name)
+end
+
+# measurement of errors ===========================
+
+# pretend the other bounds are prefect i.e. lower == upper
+# we propagate the imperfect lower bound
+
+function propagate_bad_lower_bnd_mult(f_mult :: Factor, f_src_bad :: Factor, bad_bounds :: Dict{Domain, SumPolyProdC})
+  all_containmanated = find_all_mult_containmenates(f_src_bad.var_order, f_mult.var_order, Set(keys(bad_bounds)), f_mult.bsp)
+
+  good_parent = (if f_src_bad == f_mult.parent1
+                   f_mult.parent2
+                 else
+                   f_mult.parent1
+                 end)
+
+  # return the upper bound of a patch's good parent
+  function get_good_parent_upper_bound(mult_dom :: Domain)
+    shrink = diminish_dom_dim(f_mult.var_order, good_parent.var_order, mult_dom)
+    best_cover = best_covering(shrink, keys(good_parent.potential_bounds))
+    good_parent.potential_bounds[best_cover].p_u
+  end
+
+  ret = Dict{Domain, SumPolyProdC}()
+  for bad_mult_dom in all_containmanated
+    ret[bad_mult_dom] = get_good_parent_upper_bound(bad_mult_dom) * bad_bounds
+  end
+
 end
 
 # ============== DUMPSTER ===============
