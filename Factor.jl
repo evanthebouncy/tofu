@@ -36,14 +36,14 @@ end
 abstract DomainOp
 
 type DomainMult <: DomainOp
-  mult_op :: FactorMult
+  fmultop :: FactorMult
   d1 :: Domain
   d2 :: Domain
   d_mult :: Domain
 end
 
 type DomainInte <: DomainOp
-  inte_op :: FactorInte
+  finteop :: FactorInte
   d1s :: Array{Domain}
   d_inte :: Domain
 end
@@ -67,10 +67,62 @@ type FactorGraph
   rel_domain_children :: Dict{(Factor, Domain), Array{DomainOp}}
 end
 
+# ================================ methods to modify the factor graph and its relations ==================================
+
+# initialize a factor graph
 function init_factor_graph()
   FactorGraph(Factor[], Dict{Factor,FactorOp}(), Dict{Factor,FactorOp}(),
               Dict{(Factor,Domain), DomainOp}(), Dict{(Factor,Domain),Array{DomainOp}}())
 end
+
+# adding a factor to the list of factors in the FG
+function add_factor!(FG :: FactorGraph, f :: Factor)
+  push!(FG.factors, f)
+end
+
+# add (factor, domain) -> domainOp to the FactorGraph.rel_domain_children
+function add_rel_domain_children!(FG :: FactorGraph, f :: Factor, d :: Domain, dop :: DomainOp)
+  key = (f, d)
+  if !(key in keys(FG.rel_domain_children))
+    FG.rel_domain_children[key] = DomainOp[]
+  end
+  push!(FG.rel_domain_children[key], dop)
+end
+
+# add a relation domainOP to the factor graph
+function add_rel_domain!(FG :: FactorGraph, d_op :: DomainOp)
+  if typeof(d_op) == DomainMult
+    FG.rel_domain_parents[(d_op.fmultop.f_mult, d_op.d_mult)] = d_op
+    add_rel_domain_children!(FG, d_op.fmultop.f1, d_op.d1, d_op)
+    add_rel_domain_children!(FG, d_op.fmultop.f2, d_op.d2, d_op)
+    return
+  end
+  if typeof(d_op) == DomainInte
+    FG.rel_domain_parents[(d_op.finteop.f_inte, d_op.d_inte)] = d_op
+    for p_domain in d_op.d1s
+      add_rel_domain_children!(FG, d_op.finteop.f1, p_domain, d_op)
+    end
+    return
+  end
+  assert(false)
+end
+
+# add a relation FactorOp to the factorGraph
+function add_rel_factor!(FG :: FactorGraph, f_op :: FactorOp)
+  if typeof(f_op) == FactorMult
+    FG.rel_factor_parents[f_op.f_mult] = f_op
+    FG.rel_factor_child[f_op.f1] = f_op
+    FG.rel_factor_child[f_op.f2] = f_op
+    return
+  end
+  if typeof(f_op) == FactorInte
+    FG.rel_factor_parents[f_op.f_inte] = f_op
+    FG.rel_factor_child[f_op.f1] = f_op
+    return
+  end
+  assert(false)
+end
+
 
 function feval_lower(f :: Factor, x)
   contained_dom = find_best_containing_domain(f.bsp, x)
@@ -112,7 +164,7 @@ function shatter!(var_order, dom :: Domain, p :: Partition, bsp :: BSP)
 end
 
 # make a patch from a potential function
-function patch_pot(var_order, dom :: Domain, pot :: Potential, bnd_method, deg)
+function patch_pot(FG :: FactorGraph, var_order, dom :: Domain, pot :: Potential, bnd_method, deg)
   lower_poly, upper_poly = get_poly_lower_upper(pot, var_order, dom, deg, bnd_method)
   lowest_of_lower = lowest_possible(lower_poly, dom, bnd_method)
   lower_poly = (if lowest_of_lower < -1e-6
@@ -125,31 +177,33 @@ function patch_pot(var_order, dom :: Domain, pot :: Potential, bnd_method, deg)
 end
 
 # make a factor from a potential function
-function f_pot(pot :: Potential, var_order, dom :: Domain, bnd_method="exact", deg=2)
+function f_pot(FG :: FactorGraph, pot :: Potential, var_order, dom :: Domain, bnd_method="exact", deg=2)
   bsp = new_leaf(dom)
   partition = Set{Domain}(Domain[dom])
   potential_bounds = Dict{Domain, Patch}()
-  potential_bounds[dom] = patch_pot(var_order, dom, pot, bnd_method, deg)
-  Factor(var_order, bsp, partition, potential_bounds)
+  potential_bounds[dom] = patch_pot(FG, var_order, dom, pot, bnd_method, deg)
+  ret = Factor(var_order, bsp, partition, potential_bounds)
+  add_factor!(FG, ret)
+  ret
 end
 
 # grow a factor from a potential function
-function f_pot_grow!(f :: Factor, dom :: Domain, pot :: Potential, bnd_method="exact", deg=2)
+function f_pot_grow!(FG :: FactorGraph, f :: Factor, dom :: Domain, pot :: Potential, bnd_method="exact", deg=2)
   shattered_doms = shatter!(f.var_order, dom, f.partition, f.bsp)
 
   # add the patches for the shattered domains
   for d1 in shattered_doms
-    f.potential_bounds[d1] = patch_pot(f.var_order, d1, pot, bnd_method, deg)
+    f.potential_bounds[d1] = patch_pot(FG, f.var_order, d1, pot, bnd_method, deg)
   end
 end
 
-function rand_f_pot_grow!(f :: Factor, pot :: Potential, bnd_method="exact", deg=2)
+function rand_f_pot_grow!(FG :: FactorGraph, f :: Factor, pot :: Potential, bnd_method="exact", deg=2)
   dom_to_grow = find_split_dom(f.bsp.cover_domain, f.partition)
-  f_pot_grow!(f, dom_to_grow, pot, bnd_method, deg)
+  f_pot_grow!(FG, f, dom_to_grow, pot, bnd_method, deg)
 end
 
 # give a domain, and 2 factors f1 and f2
-function patch_mult (var_order, dom :: Domain, f1 :: Factor, f2 :: Factor)
+function patch_mult (FG :: FactorGraph, var_order, dom :: Domain, f1 :: Factor, f2 :: Factor, f_mult :: Factor)
   shrink1 = diminish_dom_dim(var_order, f1.var_order, dom)
   shrink2 = diminish_dom_dim(var_order, f2.var_order, dom)
   best_cover1 = best_covering(shrink1, keys(f1.potential_bounds))
@@ -157,37 +211,42 @@ function patch_mult (var_order, dom :: Domain, f1 :: Factor, f2 :: Factor)
   patch1, patch2 = f1.potential_bounds[best_cover1], f2.potential_bounds[best_cover2]
   p_l = patch1.p_l * patch2.p_l
   p_u = patch1.p_u * patch2.p_u
-  ret = Patch(dom, p_l, p_u)
-  return ret
+  # register relationship in FG
+  fact_mult = FactorMult(f1, f2, f_mult)
+  domain_mult = DomainMult(fact_mult, best_cover1, best_cover2, dom)
+  add_rel_domain!(FG, domain_mult)
+  Patch(dom, p_l, p_u)
 end
 
-function f_mult(f1 :: Factor, f2 :: Factor, cover_dom :: Domain)
+function f_mult(FG :: FactorGraph, f1 :: Factor, f2 :: Factor, cover_dom :: Domain)
   var_order = merge_varorder(f1.var_order, f2.var_order)
   bsp = new_leaf(cover_dom)
   partition = Set{Domain}(Domain[cover_dom])
   potential_bounds = Dict{Domain, Patch}()
   ret = Factor(var_order, bsp, partition, potential_bounds)
-  ret.potential_bounds[cover_dom] = patch_mult(var_order, cover_dom, f1, f2)
+  # register fact relationship
+  add_rel_factor!(FG, FactorMult(f1, f2, ret))
+  ret.potential_bounds[cover_dom] = patch_mult(FG, var_order, cover_dom, f1, f2, ret)
   ret
 end
 
 # grow a factor from a multiplication
-function f_mult_grow!(f :: Factor, dom :: Domain, f1 :: Factor, f2 :: Factor)
+function f_mult_grow!(FG :: FactorGraph, f :: Factor, dom :: Domain, f1 :: Factor, f2 :: Factor)
   shattered_doms = shatter!(f.var_order, dom, f.partition, f.bsp)
 
   for d1 in shattered_doms
-    f.potential_bounds[d1] = patch_mult(f.var_order, d1, f1, f2)
+    f.potential_bounds[d1] = patch_mult(FG, f.var_order, d1, f1, f2, f)
   end
 end
 
-function rand_f_mult_grow!(f :: Factor, f1 :: Factor, f2 :: Factor)
+function rand_f_mult_grow!(FG :: FactorGraph, f :: Factor, f1 :: Factor, f2 :: Factor)
   dom_to_grow = find_split_dom(f.bsp.cover_domain, f.partition)
-  f_mult_grow!(f, dom_to_grow, f1, f2)
+  f_mult_grow!(FG, f, dom_to_grow, f1, f2)
 end
 
 
 # give a domain, and the factor it integrates from
-function patch_integrate (var_order, dom :: Domain, f1 :: Factor, inte_var_name)
+function patch_integrate (FG :: FactorGraph, var_order, dom :: Domain, f1 :: Factor, inte_var_name, f_inte :: Factor)
   smallest_cover = find_smallest_cover(f1.bsp, dom, var_order, f1.var_order, inte_var_name)
   integrated_pots = (SumPolyProdC,SumPolyProdC)[]
   for s_dom in smallest_cover
@@ -204,32 +263,37 @@ function patch_integrate (var_order, dom :: Domain, f1 :: Factor, inte_var_name)
                             reduce((x,y)-> (x[1]+y[1],x[2]+y[2]), integrated_pots)
                           end
                           )
-  ret = Patch(dom, lower_pol, upper_pol)
-  ret
+  # register relationship in FG
+  fact_inte = FactorInte(f1, inte_var_name, f_inte)
+  domain_inte = DomainInte(fact_inte, [s_dom for s_dom in smallest_cover], dom)
+  add_rel_domain!(FG, domain_inte)
+  Patch(dom, lower_pol, upper_pol)
 end
 
-function f_inte(f1 :: Factor, inte_var_name :: ASCIIString, cover_dom :: Domain)
+function f_inte(FG :: FactorGraph, f1 :: Factor, inte_var_name :: ASCIIString, cover_dom :: Domain)
   var_order = filter(x->x!=inte_var_name, f1.var_order)
   bsp = new_leaf(cover_dom)
   partition = Set{Domain}(Domain[cover_dom])
   potential_bounds = Dict{Domain, Patch}()
   ret = Factor(var_order, bsp, partition, potential_bounds)
-  ret.potential_bounds[cover_dom] = patch_integrate(var_order, cover_dom, f1, inte_var_name)
+  ret.potential_bounds[cover_dom] = patch_integrate(FG, var_order, cover_dom, f1, inte_var_name, ret)
+  # register fact relationship
+  add_rel_factor!(FG, FactorInte(f1, inte_var_name, ret))
   ret
 end
 
 # grow a factor from a potential function
-function f_inte_grow!(f :: Factor, dom :: Domain, f1 :: Factor, inte_var_name :: ASCIIString)
+function f_inte_grow!(FG :: FactorGraph, f :: Factor, dom :: Domain, f1 :: Factor, inte_var_name :: ASCIIString)
   shattered_doms = shatter!(f.var_order, dom, f.partition, f.bsp)
 
   for d1 in shattered_doms
-    f.potential_bounds[d1] = patch_integrate(f.var_order, d1, f1, inte_var_name)
+    f.potential_bounds[d1] = patch_integrate(FG, f.var_order, d1, f1, inte_var_name, f)
   end
 end
 
-function rand_f_inte_grow!(f :: Factor, f1 :: Factor, inte_var_name :: ASCIIString)
+function rand_f_inte_grow!(FG :: FactorGraph, f :: Factor, f1 :: Factor, inte_var_name :: ASCIIString)
   dom_to_grow = find_split_dom(f.bsp.cover_domain, f.partition)
-  f_inte_grow!(f, dom_to_grow, f1, inte_var_name)
+  f_inte_grow!(FG, f, dom_to_grow, f1, inte_var_name)
 end
 
 # measurement of errors ===========================
