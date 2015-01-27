@@ -778,12 +778,12 @@ function - (sppc :: SumPolyProdC)
   SumPolyProdC(spp, c)
 end
 
-function - (spp_c1 :: Union(SumPolyProdC, SumPolyProd), spp_c2 :: Union(SumPolyProdC, SumPolyProd))
+@memoize function sppc_sub (spp_c1 :: Union(SumPolyProdC, SumPolyProd), spp_c2 :: Union(SumPolyProdC, SumPolyProd))
   spp_c1 + (-spp_c2)
 end
 
 
-function * (sppc1 :: SumPolyProdC, sppc2 :: SumPolyProdC)
+@memoize function sppc_mult (sppc1 :: SumPolyProdC, sppc2 :: SumPolyProdC)
   spp1, spp2 = sppc1.spp, sppc2.spp
   c1, c2 = sppc1.c, sppc2.c
   spp = (spp1 * spp2) + (c1 * spp2) + (c2 * spp1)

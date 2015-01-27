@@ -218,8 +218,8 @@ function patch_mult (FG :: FactorGraph, var_order, dom :: Domain, f1 :: Factor, 
   best_cover1 = best_covering(shrink1, keys(f1.potential_bounds))
   best_cover2 = best_covering(shrink2, keys(f2.potential_bounds))
   patch1, patch2 = f1.potential_bounds[best_cover1], f2.potential_bounds[best_cover2]
-  p_l = patch1.p_l * patch2.p_l
-  p_u = patch1.p_u * patch2.p_u
+  p_l = sppc_mult(patch1.p_l, patch2.p_l)
+  p_u = sppc_mult(patch1.p_u, patch2.p_u)
   # register relationship in FG
   fact_mult = FactorMult(f1, f2, f_mult)
   domain_mult = DomainMult(fact_mult, best_cover1, best_cover2, dom)
@@ -438,7 +438,7 @@ function propagate_imprecise_lower(FG :: FactorGraph, f :: Factor, dom_lower_bnd
                else
                  factor_parent2.potential_bounds[parents_rel.d2].p_l
                end)
-      nxt_imprecise[c_dom] = poly1 * poly2
+      nxt_imprecise[c_dom] = sppc_mult(poly1, poly2)
     end
     return nxt_fact, nxt_imprecise
   end
@@ -509,7 +509,7 @@ function find_imprecise_error(FG :: FactorGraph, f :: Factor, dom_lower_bnds :: 
   # use the recursion thing to find the final factor and the imprecise lower bound of it
   final_f, final_bnd = propagate_imprecise_lower_rec(FG , f, dom_lower_bnds, contributors)
   # for all the domain that has imprecise lower bound, compute p_u - p_l on it...
-  dom_sppcs = [(final_dom, final_f.potential_bounds[final_dom].p_u - final_bnd[final_dom]) for final_dom in keys(final_bnd)]
+  dom_sppcs = [(final_dom, sppc_sub(final_f.potential_bounds[final_dom].p_u, final_bnd[final_dom])) for final_dom in keys(final_bnd)]
   volumes = [poly_volume(final_f.var_order, d_sppc[1], d_sppc[2]) for d_sppc in dom_sppcs]
   reduce((x,y)->x+y, volumes)
 end
