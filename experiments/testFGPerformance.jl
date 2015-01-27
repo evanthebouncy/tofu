@@ -17,7 +17,7 @@ f_inte1 = f_inte(FG, "f_inte1", f_mult1, "x", (Float64,Float64)[bigdom for i in 
 heuristic_grow!(FG)
 
 function profile_test()
-  for i in 1:20
+  for i in 1:10
     heuristic_grow!(FG)
   end
 end

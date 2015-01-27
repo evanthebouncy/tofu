@@ -73,6 +73,8 @@ type FactorGraph
   # similar as above, except remember its multiple childrens. it is possible for a single (Factor,Domain)
   # to register multiple DomainOp due to overlapping
   rel_domain_children :: Dict{(Factor, Domain), Array{DomainOp}}
+  # memoize the cost of the partitions
+  memoized_cost :: Dict{(Factor, Domain), Float64}
 end
 
 # ================================ methods to modify the factor graph and its relations ==================================
@@ -80,7 +82,8 @@ end
 # initialize a factor graph
 function init_factor_graph()
   FactorGraph(Dict{Factor, Potential}(), Factor[], Dict{Factor,FactorOp}(), Dict{Factor,FactorOp}(),
-              Dict{(Factor,Domain), DomainOp}(), Dict{(Factor,Domain),Array{DomainOp}}())
+              Dict{(Factor,Domain), DomainOp}(), Dict{(Factor,Domain),Array{DomainOp}}(),
+              Dict{(Factor, Domain), Float64}())
 end
 
 # adding a factor to the list of factors in the FG
@@ -514,33 +517,39 @@ function find_imprecise_error(FG :: FactorGraph, f :: Factor, dom_lower_bnds :: 
   reduce((x,y)->x+y, volumes)
 end
 
-function find_all_split_error(FG :: FactorGraph)
+function find_best_split!(FG :: FactorGraph)
   last_factor = last(FG.factors)
   upstream_contribution = all_upstream_contributions_rec(last_factor, last_factor.partition)
   all_split_doms = get_valid_split_domains(FG, upstream_contribution)
-  ret = Dict{(Factor, Domain), Float64}()
+
+  # the queue contains entries of the form ((factor, domain), cost) : cost
+  cost_queue = Collections.PriorityQueue{((Factor, Domain), Float64), Float64}()
   for fact_dom in all_split_doms
     fact, dom = fact_dom[1], fact_dom[2]
-    imprecise_err = find_imprecise_error(FG, fact, [dom => fact.potential_bounds[dom].p_l], upstream_contribution)
-    ret[(fact, dom)] = imprecise_err
+    if fact_dom in keys(FG.memoized_cost)
+      Collections.enqueue!(cost_queue, ((fact, dom), FG.memoized_cost[fact_dom]), -FG.memoized_cost[fact_dom])
+    else
+      imprecise_err = find_imprecise_error(FG, fact, [dom => fact.potential_bounds[dom].p_l], upstream_contribution)
+      Collections.enqueue!(cost_queue, ((fact, dom), imprecise_err), -imprecise_err)
+    end
   end
-  ret
+
+  # pop the largest element, and re-computes its cost
+  cur_f_dom, cur_cost = Collections.dequeue!(cost_queue)
+  cur_f, cur_dom = cur_f_dom
+  recomputed_cost = find_imprecise_error(FG, cur_f, [cur_dom => cur_f.potential_bounds[cur_dom].p_l], upstream_contribution)
+  # if the recomputed cost is the same, for SURE we want to split this one!! so we exit the loop
+  # however if the recomputed cost is smaller... then we have to update
+  while recomputed_cost < (cur_cost - 1e-6)
+    FG.memoized_cost[(cur_f, cur_dom)] = recomputed_cost
+    Collections.enqueue!(cost_queue, ((cur_f, cur_dom), recomputed_cost), -recomputed_cost)
+  end
+  cur_f, cur_dom
 end
 
 function heuristic_grow!(FG :: FactorGraph)
-  all_err = find_all_split_error(FG)
-  max_tuples = (Float64, Factor, Domain)[]
-  for f_dom in keys(all_err)
-    push!(max_tuples, (all_err[f_dom], f_dom[1], f_dom[2]))
-  end
-  max_to_split = (if length(max_tuples) == 1
-                    max_tuples[1]
-                  else
-                    max(max_tuples...)
-                  end
-                  )
-  chosen_fact, chosen_dom = max_to_split[2], max_to_split[3]
-  factor_grow!(FG, chosen_fact, chosen_dom)
+  best_fact, best_dom = find_best_split!(FG)
+  factor_grow!(FG, best_fact, best_dom)
 end
 
 # ============== DUMPSTER ===============
