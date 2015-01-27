@@ -533,7 +533,12 @@ function heuristic_grow!(FG :: FactorGraph)
   for f_dom in keys(all_err)
     push!(max_tuples, (all_err[f_dom], f_dom[1], f_dom[2]))
   end
-  max_to_split = max(max_tuples...)
+  max_to_split = (if length(max_tuples) == 1
+                    max_tuples[1]
+                  else
+                    max(max_tuples...)
+                  end
+                  )
   chosen_fact, chosen_dom = max_to_split[2], max_to_split[3]
   factor_grow!(FG, chosen_fact, chosen_dom)
 end

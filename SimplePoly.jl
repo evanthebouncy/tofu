@@ -2,6 +2,7 @@ using Iterators
 using Optim
 include("/home/evan/Documents/research/tofu/Domain.jl")
 include("/home/evan/Documents/research/tofu/Phc.jl")
+using Memoize
 
 # ==================== something that should be put later but we'll fix it later
 immutable STDPolyTerm
@@ -14,7 +15,6 @@ immutable STDPoly
   var_order :: Array{ASCIIString}
   terms :: Array{STDPolyTerm}
 end
-
 
 # ============= POLYNOMIALS ===============
 
@@ -287,7 +287,7 @@ function * (c1 :: Float64, pp1 :: PolyProd)
   PolyProd(c, var_order, polys)
 end
 
-function ∫ (pp :: PolyProd, x::ASCIIString, a, b)
+@memoize function ∫ (pp :: PolyProd, x::ASCIIString, a, b)
   assert(x in pp.var_order)
   poly1 = pp.polys[x]
   poly1_int = ∫(poly1)
@@ -791,7 +791,7 @@ function * (sppc1 :: SumPolyProdC, sppc2 :: SumPolyProdC)
   SumPolyProdC(spp, c)
 end
 
-function ∫ (sppc :: SumPolyProdC, x :: ASCIIString, a, b)
+@memoize function ∫ (sppc :: SumPolyProdC, x :: ASCIIString, a, b)
   spp, c = sppc.spp, sppc.c
   spp_int = ∫(spp, x, a, b)
   c_int = c * (b - a)
