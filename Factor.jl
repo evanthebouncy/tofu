@@ -1,4 +1,5 @@
 include("/home/evan/Documents/research/tofu/Abstraction.jl")
+import Base.isless
 
 # a patch is a region along with a polynomial lower and upper bound
 type Patch
@@ -17,6 +18,9 @@ type Factor
   partition :: Partition
   potential_bounds :: Dict{Domain, Patch}
 end
+
+# factors are un-ordered by default ...
+isless(f1::Factor, f2::Factor) = true
 
 # this keeps relationships between factors as operations Mult, and Inte
 abstract FactorOp
@@ -52,6 +56,8 @@ end
 
 # A collection of Factors and their relationships (and the domain relationships)
 type FactorGraph
+  # remember the potentials with the source factors
+  potentials :: Dict{Factor, Potential}
   factors :: Array{Factor}
   # a mapping between a factor and a FactorOp remembering its parents
   # e.g. f3 -> FactorMult(f1, f2, f3), i.e. f1 and f2 are parents of f3
@@ -73,7 +79,7 @@ end
 
 # initialize a factor graph
 function init_factor_graph()
-  FactorGraph(Factor[], Dict{Factor,FactorOp}(), Dict{Factor,FactorOp}(),
+  FactorGraph(Dict{Factor, Potential}(), Factor[], Dict{Factor,FactorOp}(), Dict{Factor,FactorOp}(),
               Dict{(Factor,Domain), DomainOp}(), Dict{(Factor,Domain),Array{DomainOp}}())
 end
 
@@ -125,7 +131,6 @@ function add_rel_factor!(FG :: FactorGraph, f_op :: FactorOp)
   assert(false)
 end
 
-
 function feval_lower(f :: Factor, x)
   contained_dom = find_best_containing_domain(f.bsp, x)
   peval(f.potential_bounds[contained_dom].p_l, x)
@@ -166,7 +171,7 @@ function shatter!(var_order, dom :: Domain, p :: Partition, bsp :: BSP)
 end
 
 # make a patch from a potential function
-function patch_pot(FG :: FactorGraph, var_order, dom :: Domain, pot :: Potential, bnd_method, deg)
+function patch_pot(FG :: FactorGraph, var_order, dom :: Domain, pot :: Potential, bnd_method="approx", deg=2)
   lower_poly, upper_poly = get_poly_lower_upper(pot, var_order, dom, deg, bnd_method)
   lowest_of_lower = lowest_possible(lower_poly, dom, bnd_method)
   lower_poly = (if lowest_of_lower < -1e-6
@@ -185,23 +190,25 @@ function f_pot(FG :: FactorGraph, f_name, pot :: Potential, var_order, dom :: Do
   potential_bounds = Dict{Domain, Patch}()
   potential_bounds[dom] = patch_pot(FG, var_order, dom, pot, bnd_method, deg)
   ret = Factor(f_name, var_order, bsp, partition, potential_bounds)
+  # book keeping
   add_factor!(FG, ret)
+  FG.potentials[ret] = pot
   ret
 end
 
 # grow a factor from a potential function
-function f_pot_grow!(FG :: FactorGraph, f :: Factor, dom :: Domain, pot :: Potential, bnd_method="exact", deg=2)
+function f_pot_grow!(FG :: FactorGraph, f :: Factor, dom :: Domain)
   shattered_doms = shatter!(f.var_order, dom, f.partition, f.bsp)
-
+  pot = FG.potentials[f]
   # add the patches for the shattered domains
   for d1 in shattered_doms
-    f.potential_bounds[d1] = patch_pot(FG, f.var_order, d1, pot, bnd_method, deg)
+    f.potential_bounds[d1] = patch_pot(FG, f.var_order, d1, pot, "approx", 2)
   end
 end
 
-function rand_f_pot_grow!(FG :: FactorGraph, f :: Factor, pot :: Potential, bnd_method="exact", deg=2)
+function rand_f_pot_grow!(FG :: FactorGraph, f :: Factor)
   dom_to_grow = find_split_dom(f.bsp.cover_domain, f.partition)
-  f_pot_grow!(FG, f, dom_to_grow, pot, bnd_method, deg)
+  f_pot_grow!(FG, f, dom_to_grow)
 end
 
 # give a domain, and 2 factors f1 and f2
@@ -226,7 +233,7 @@ function f_mult(FG :: FactorGraph, f_name, f1 :: Factor, f2 :: Factor, cover_dom
   partition = Set{Domain}(Domain[cover_dom])
   potential_bounds = Dict{Domain, Patch}()
   ret = Factor(f_name, var_order, bsp, partition, potential_bounds)
-  # register fact relationship to FG
+  # register fact relationship to FG and various book keepings
   push!(FG.factors, ret)
   add_rel_factor!(FG, FactorMult(f1, f2, ret))
   ret.potential_bounds[cover_dom] = patch_mult(FG, var_order, cover_dom, f1, f2, ret)
@@ -234,7 +241,9 @@ function f_mult(FG :: FactorGraph, f_name, f1 :: Factor, f2 :: Factor, cover_dom
 end
 
 # grow a factor from a multiplication
-function f_mult_grow!(FG :: FactorGraph, f :: Factor, dom :: Domain, f1 :: Factor, f2 :: Factor)
+function f_mult_grow!(FG :: FactorGraph, f :: Factor, dom :: Domain)
+  parents_rel = FG.rel_factor_parents[f]
+  f1, f2 = parents_rel.f1, parents_rel.f2
   shattered_doms = shatter!(f.var_order, dom, f.partition, f.bsp)
 
   for d1 in shattered_doms
@@ -242,9 +251,9 @@ function f_mult_grow!(FG :: FactorGraph, f :: Factor, dom :: Domain, f1 :: Facto
   end
 end
 
-function rand_f_mult_grow!(FG :: FactorGraph, f :: Factor, f1 :: Factor, f2 :: Factor)
+function rand_f_mult_grow!(FG :: FactorGraph, f :: Factor)
   dom_to_grow = find_split_dom(f.bsp.cover_domain, f.partition)
-  f_mult_grow!(FG, f, dom_to_grow, f1, f2)
+  f_mult_grow!(FG, f, dom_to_grow)
 end
 
 
@@ -266,7 +275,7 @@ function patch_integrate (FG :: FactorGraph, var_order, dom :: Domain, f1 :: Fac
                             reduce((x,y)-> (x[1]+y[1],x[2]+y[2]), integrated_pots)
                           end
                           )
-  # register relationship in FG
+  # register relationship in FG and book keepings
   fact_inte = FactorInte(f1, inte_var_name, f_inte)
   domain_inte = DomainInte(fact_inte, [s_dom for s_dom in smallest_cover], dom)
   add_rel_domain!(FG, domain_inte)
@@ -287,7 +296,9 @@ function f_inte(FG :: FactorGraph, f_name, f1 :: Factor, inte_var_name :: ASCIIS
 end
 
 # grow a factor from a potential function
-function f_inte_grow!(FG :: FactorGraph, f :: Factor, dom :: Domain, f1 :: Factor, inte_var_name :: ASCIIString)
+function f_inte_grow!(FG :: FactorGraph, f :: Factor, dom :: Domain)
+  parents_rel = FG.rel_factor_parents[f]
+  f1, inte_var_name = parents_rel.f1, parents_rel.inte_var
   shattered_doms = shatter!(f.var_order, dom, f.partition, f.bsp)
 
   for d1 in shattered_doms
@@ -295,10 +306,28 @@ function f_inte_grow!(FG :: FactorGraph, f :: Factor, dom :: Domain, f1 :: Facto
   end
 end
 
-function rand_f_inte_grow!(FG :: FactorGraph, f :: Factor, f1 :: Factor, inte_var_name :: ASCIIString)
+function rand_f_inte_grow!(FG :: FactorGraph, f :: Factor)
   dom_to_grow = find_split_dom(f.bsp.cover_domain, f.partition)
-  f_inte_grow!(FG, f, dom_to_grow, f1, inte_var_name)
+  f_inte_grow!(FG, f, dom_to_grow)
 end
+
+function factor_grow!(FG :: FactorGraph, f :: Factor, dom :: Domain)
+  # if it is a source potential factor
+  if f in keys(FG.potentials)
+    f_pot_grow!(FG, f, dom)
+  # if it is not a source, it has parents
+  else
+    f_parent_rel = FG.rel_factor_parents[f]
+    # if it is a multiplication ...
+    if typeof(f_parent_rel) == FactorMult
+      f_mult_grow!(FG, f, dom)
+      # otherwise it is integration
+    else
+      f_inte_grow!(FG, f, dom)
+    end
+  end
+end
+
 
 # measurement of errors ===========================
 
@@ -323,7 +352,7 @@ function one_step_upstream_contribution(factor :: Factor, doms :: Set{Domain})
       union!(dom1s, Domain[rel_multi.d1])
       union!(dom2s, Domain[rel_multi.d2])
     end
-    return [(f1, dom1s), (f2, dom2s)]
+    return [f1 => dom1s, f2 => dom2s]
   end
   # if it is integration...
   if typeof(f_type) == FactorInte
@@ -333,35 +362,30 @@ function one_step_upstream_contribution(factor :: Factor, doms :: Set{Domain})
       rel_inte = FG.rel_domain_parents[(factor, dom)]
       union!(dom1s, rel_inte.d1s)
     end
-    return [(f1, dom1s)]
+    return [f1 => dom1s]
   end
 end
 
 function all_upstream_contributions_rec(factor :: Factor, doms :: Set{Domain})
   attempt_upstream = one_step_upstream_contribution(factor, doms)
   if (attempt_upstream == Nothing())
-    [(factor, doms)]
+    [factor => doms]
   else
-    ret = (Factor, Array{Domain})[]
-    for factor_doms in attempt_upstream
-      ret = [ret, all_upstream_contributions_rec(factor_doms...)]
+    ret = Dict{Factor, Set{Domain}}()
+    for factor1 in keys(attempt_upstream)
+      ret = merge(ret, all_upstream_contributions_rec(factor1, attempt_upstream[factor1]))
     end
-    push!(ret, (factor, doms))
+    ret = merge(ret, [factor => doms])
     ret
   end
 end
 
-# find out all the domains that could be further shattered with effect
-function get_valid_split_domains(FG :: FactorGraph)
-  result_factor = last(FG.factors)
-  @show([f.f_name for f in FG.factors])
-  upstreams = all_upstream_contributions_rec(result_factor, result_factor.partition)
-  @show(length(upstreams))
-  ret = (Factor, Domain)[]
-  for fact_dom in upstreams
-    fact, doms = fact_dom
+# find out all the domains that could be further shattered with effect from upstream contributions
+function get_valid_split_domains(FG :: FactorGraph, upstreams_contribution :: Dict{Factor, Set{Domain}})
+  ret = Set{(Factor, Domain)}()
+  for fact in keys(upstreams_contribution)
+    doms = upstreams_contribution[fact]
     filtered_doms = filter(d->d in fact.partition, doms)
-    @show(filtered_doms)
     for filt_dom in filtered_doms
       push!(ret, (fact, filt_dom))
     end
@@ -371,27 +395,147 @@ end
 
 # pretend the other bounds are prefect i.e. lower == upper
 # we propagate the imperfect lower bound
-function propagate_bad_lower_bnd_mult(f_mult :: Factor, f_src_bad :: Factor, bad_bounds :: Dict{Domain, SumPolyProdC})
-  all_containmanated = find_all_mult_containmenates(f_src_bad.var_order, f_mult.var_order, Set(keys(bad_bounds)), f_mult.bsp)
+function propagate_imprecise_lower(FG :: FactorGraph, f :: Factor, dom_lower_bnds :: Dict{Domain, SumPolyProdC}, contributors :: Dict{Factor, Set{Domain}})
+  if !(f in keys(FG.rel_factor_child))
+    return (f, dom_lower_bnds)
+  end
+  # how is this factor f related to its children?
+  factor_child_rel = FG.rel_factor_child[f]
 
-  good_parent = (if f_src_bad == f_mult.parent1
-                   f_mult.parent2
-                 else
-                   f_mult.parent1
-                 end)
-
-  # return the upper bound of a patch's good parent
-  function get_good_parent_upper_bound(mult_dom :: Domain)
-    shrink = diminish_dom_dim(f_mult.var_order, good_parent.var_order, mult_dom)
-    best_cover = best_covering(shrink, keys(good_parent.potential_bounds))
-    good_parent.potential_bounds[best_cover].p_u
+  # in the case of multiplication
+  if typeof(factor_child_rel) == FactorMult
+    # the next factor is the f_mult field of the relation
+    nxt_fact = factor_child_rel.f_mult
+    # what domain in the next factor should we even consider?
+    valid_children = Set{Domain}()
+    # for all the domain in our input, that has imprecise lower bound
+    for f_dom in keys(dom_lower_bnds)
+      # how is it related to its children in the nxt_fact ? there are multiple relationships possible
+      dom_children_rel = FG.rel_domain_children[(f, f_dom)]
+      # for each of the possible relationship
+      for dom_child_rel in dom_children_rel
+        # get the domain of the child
+        child_dom = dom_child_rel.d_mult
+        # consider the child domain only if it is a contributor
+        if child_dom in contributors[nxt_fact]
+          push!(valid_children, child_dom)
+        end
+      end
+    end
+    nxt_imprecise = Dict{Domain, SumPolyProdC}()
+    # now we have a set of valid children dom that we know we want to consider... for each of them
+    for c_dom in valid_children
+      parents_rel = FG.rel_domain_parents[nxt_fact, c_dom]
+      factor_parent1 = parents_rel.fmultop.f1
+      factor_parent2 = parents_rel.fmultop.f2
+      poly1 = (if factor_parent1 == f
+                 dom_lower_bnds[parents_rel.d1]
+               else
+                 factor_parent1.potential_bounds[parents_rel.d1].p_u
+               end)
+      poly2 = (if factor_parent2 == f
+                 dom_lower_bnds[parents_rel.d2]
+               else
+                 factor_parent2.potential_bounds[parents_rel.d2].p_l
+               end)
+      nxt_imprecise[c_dom] = poly1 * poly2
+    end
+    return nxt_fact, nxt_imprecise
   end
 
-  ret = Dict{Domain, SumPolyProdC}()
-  for bad_mult_dom in all_containmanated
-    ret[bad_mult_dom] = get_good_parent_upper_bound(bad_mult_dom) * bad_bounds
+  # in the case of integration
+  if typeof(factor_child_rel) == FactorInte
+    # the next factor is the f_mult field of the relation
+    nxt_fact = factor_child_rel.f_inte
+    # what domain in the next factor should we even consider?
+    valid_children = Set{Domain}()
+    # for all the domain in our input, that has imprecise lower bound
+    for f_dom in keys(dom_lower_bnds)
+      # how is it related to its children in the nxt_fact ? there are multiple relationships possible
+      dom_children_rel = FG.rel_domain_children[(f, f_dom)]
+      # for each of the possible relationship
+      for dom_child_rel in dom_children_rel
+        # get the domain of the child
+        child_dom = dom_child_rel.d_inte
+        # consider the child domain only if it is a contributor
+        if child_dom in contributors[nxt_fact]
+          push!(valid_children, child_dom)
+        end
+      end
+    end
+    nxt_imprecise = Dict{Domain, SumPolyProdC}()
+    # now we have a set of valid children dom that we know we want to consider... for each of them
+    for c_dom in valid_children
+      # get the parents
+      parents_rel = FG.rel_domain_parents[nxt_fact, c_dom]
+      inte_var = parents_rel.finteop.inte_var
+      # this is all the parent domain that gets integrated down
+      dom1s = parents_rel.d1s
+      integrated_pots = SumPolyProdC[]
+      # for all the potential parents
+      for s_dom in dom1s
+        bound_left, bound_right = s_dom[findfirst(f.var_order, inte_var)]
+        # if it is a parent that has been made imprecise...
+        if s_dom in keys(dom_lower_bnds)
+          push!(integrated_pots, ∫(dom_lower_bnds[s_dom], inte_var, bound_left, bound_right))
+        # if not, use the upper bound
+        else
+          push!(integrated_pots, ∫(f.potential_bounds[s_dom].p_u, inte_var, bound_left, bound_right))
+        end
+      end
+      imprecise_lower = (if length(integrated_pots) == 1
+                           integrated_pots[1]
+                         else
+                           reduce((x,y)->x+y, integrated_pots)
+                         end
+                         )
+      nxt_imprecise[c_dom] = imprecise_lower
+    end
+    return nxt_fact, nxt_imprecise
   end
 
+end
+
+function propagate_imprecise_lower_rec(FG :: FactorGraph, f :: Factor, dom_lower_bnds :: Dict{Domain, SumPolyProdC}, contributors :: Dict{Factor, Set{Domain}})
+  nxt_f, nxt_bnd = propagate_imprecise_lower(FG, f, dom_lower_bnds, contributors)
+  if nxt_f == f
+    nxt_f, nxt_bnd
+  else
+    propagate_imprecise_lower_rec(FG , nxt_f, nxt_bnd, contributors)
+  end
+end
+
+function find_imprecise_error(FG :: FactorGraph, f :: Factor, dom_lower_bnds :: Dict{Domain, SumPolyProdC}, contributors :: Dict{Factor, Set{Domain}})
+  # use the recursion thing to find the final factor and the imprecise lower bound of it
+  final_f, final_bnd = propagate_imprecise_lower_rec(FG , f, dom_lower_bnds, contributors)
+  # for all the domain that has imprecise lower bound, compute p_u - p_l on it...
+  dom_sppcs = [(final_dom, final_f.potential_bounds[final_dom].p_u - final_bnd[final_dom]) for final_dom in keys(final_bnd)]
+  volumes = [poly_volume(final_f.var_order, d_sppc[1], d_sppc[2]) for d_sppc in dom_sppcs]
+  reduce((x,y)->x+y, volumes)
+end
+
+function find_all_split_error(FG :: FactorGraph)
+  last_factor = last(FG.factors)
+  upstream_contribution = all_upstream_contributions_rec(last_factor, last_factor.partition)
+  all_split_doms = get_valid_split_domains(FG, upstream_contribution)
+  ret = Dict{(Factor, Domain), Float64}()
+  for fact_dom in all_split_doms
+    fact, dom = fact_dom[1], fact_dom[2]
+    imprecise_err = find_imprecise_error(FG, fact, [dom => fact.potential_bounds[dom].p_l], upstream_contribution)
+    ret[(fact, dom)] = imprecise_err
+  end
+  ret
+end
+
+function heuristic_grow!(FG :: FactorGraph)
+  all_err = find_all_split_error(FG)
+  max_tuples = (Float64, Factor, Domain)[]
+  for f_dom in keys(all_err)
+    push!(max_tuples, (all_err[f_dom], f_dom[1], f_dom[2]))
+  end
+  max_to_split = max(max_tuples...)
+  chosen_fact, chosen_dom = max_to_split[2], max_to_split[3]
+  factor_grow!(FG, chosen_fact, chosen_dom)
 end
 
 # ============== DUMPSTER ===============
