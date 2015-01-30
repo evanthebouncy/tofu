@@ -288,13 +288,17 @@ function * (c1 :: Float64, pp1 :: PolyProd)
 end
 
 @memoize function ∫ (pp :: PolyProd, x::ASCIIString, a, b)
-  assert(x in pp.var_order)
-  poly1 = pp.polys[x]
-  poly1_int = ∫(poly1)
-  c = pp.c * (peval(poly1_int,b) - peval(poly1_int, a))
-  var_order = filter(name->(name != x), pp.var_order)
-  polys = [name => pp.polys[name] for name in var_order]
-  PolyProd(c, var_order, polys)
+  if !(x in pp.var_order)
+    PolyProd(pp.c*(b-a), pp.var_order, pp.polys)
+  else
+    assert(x in pp.var_order)
+    poly1 = pp.polys[x]
+    poly1_int = ∫(poly1)
+    c = pp.c * (peval(poly1_int,b) - peval(poly1_int, a))
+    var_order = filter(name->(name != x), pp.var_order)
+    polys = [name => pp.polys[name] for name in var_order]
+    PolyProd(c, var_order, polys)
+  end
 end
 
 function δ (pp :: PolyProd, x)

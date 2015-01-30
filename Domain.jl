@@ -316,10 +316,18 @@ function find_smallest_cover(bsp :: BSP, target_domain :: Domain, small_var_orde
       ret
     else
       left_squished = diminish_dom_dim(bsp_var_order, small_var_order, bsp.left.cover_domain)
+      right_squished = diminish_dom_dim(bsp_var_order, small_var_order, bsp.right.cover_domain)
+      # if left side contains, go down left
       if dom_subset(target_domain, left_squished)
         find_smallest_cover(bsp.left, target_domain, small_var_order, bsp_var_order, inte_var_name)
       else
-        find_smallest_cover(bsp.right, target_domain, small_var_order, bsp_var_order, inte_var_name)
+        # if right side contains, go down right
+        if dom_subset(target_domain, right_squished)
+          find_smallest_cover(bsp.right, target_domain, small_var_order, bsp_var_order, inte_var_name)
+        # if neither contains, return as it is
+        else
+          Domain[bsp.cover_domain]
+        end
       end
     end
   end

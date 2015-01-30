@@ -48,6 +48,7 @@ function plus_dist(y, x1, x2)
 end
 
 
+
 # ======================================================================
 # convert distances to actual potential functions!
 
@@ -91,4 +92,13 @@ function get_potential_from_dist(dist)
   Potential(pot_fun, pot_bnd_fun)
 end
 
+# uniform potential
+uniform_pot = Potential(
+  ((x, a, b) ->
+   (if (a < x < b) & ((b - a) > 1e-4)
+      1.0 / (b - a)
+    else
+      0.0
+    end
+    )), (x, a, b) -> 0.0)
 
