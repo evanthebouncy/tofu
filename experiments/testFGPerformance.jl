@@ -17,7 +17,8 @@ f_inte1 = f_inte(FG, "f_inte1", f_mult1, "x", (Float64,Float64)[bigdom for i in 
 heuristic_grow!(FG)
 
 function profile_test()
-  for i in 1:10
+  for i in 1:1000
+    @show(i)
     heuristic_grow!(FG)
   end
 end
@@ -25,12 +26,15 @@ end
 Profile.init(10^8, 0.001)
 Profile.clear()
 @profile profile_test()
-ProfileView.view()
 
+ProfileView.view()
+profile_test()
 
 
 # sanity check to see if we ruined it by caching
 using Gadfly
+
+plot(z=(x,y)->feval_upper(f_mult1,[x,y]), x=dom_x, y=dom_y, Geom.contour)
 
 draw_dom2d(f_mult1.partition)
 draw_dom2d(f_eq.partition)

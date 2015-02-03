@@ -75,6 +75,8 @@ type FactorGraph
   rel_domain_children :: Dict{(Factor, Domain), Array{DomainOp}}
   # memoize the cost of the partitions
   memoized_cost :: Dict{(Factor, Domain), Float64}
+  # keep track of if memozied_cost has been recently computed
+  cost_recent :: Set{(Factor, Domain)}
 end
 
 # ================================ methods to modify the factor graph and its relations ==================================
@@ -83,7 +85,7 @@ end
 function init_factor_graph()
   FactorGraph(Dict{Factor, Potential}(), Factor[], Dict{Factor,FactorOp}(), Dict{Factor,FactorOp}(),
               Dict{(Factor,Domain), DomainOp}(), Dict{(Factor,Domain),Array{DomainOp}}(),
-              Dict{(Factor, Domain), Float64}())
+              Dict{(Factor, Domain), Float64}(), Set{(Factor, Domain)}())
 end
 
 # adding a factor to the list of factors in the FG
@@ -396,6 +398,160 @@ function get_valid_split_domains(FG :: FactorGraph, upstreams_contribution :: Di
   ret
 end
 
+# get imprecision on a single factor and a single domain
+# if the result is cached, return it, if not, call the expensife funcion
+# and cache the result
+function get_imprecision!(FG :: FactorGraph ,f :: Factor, dom :: Domain, contributors :: Dict{Factor, Set{Domain}})
+  if (f, dom) in FG.cost_recent
+    FG.memoized_cost[(f, dom)]
+  else
+    ret_imprecision = get_set_imprecisions!(FG, f, [dom => f.potential_bounds[dom].p_l], contributors)
+    FG.memoized_cost[(f, dom)] = ret_imprecision
+    ret_imprecision
+  end
+end
+
+# given a factor and a set of domains in it, find out the imprecision
+# of them all the way to the bottom
+function get_set_imprecisions!(FG::FactorGraph, f::Factor, dom_lower_bnds::Dict{Domain, SumPolyProdC}, contributors::Dict{Factor, Set{Domain}})
+  if !(f in keys(FG.rel_factor_child))
+    final_bnd, final_f = dom_lower_bnds, f
+    dom_sppcs = [(final_dom, sppc_sub(final_f.potential_bounds[final_dom].p_u, final_bnd[final_dom])) for final_dom in keys(final_bnd)]
+    volumes = [poly_volume(final_f.var_order, d_sppc[1], d_sppc[2]) for d_sppc in dom_sppcs]
+    if length(volumes) == 0
+      return 0.0
+    end
+    return reduce((x,y)->x+y, volumes)
+  end
+
+  factor_child_rel = FG.rel_factor_child[f]
+  if typeof(factor_child_rel) == FactorMult
+    nxt_f, nxt_bnd = propagate_mult_imprecise_lower(FG, f, factor_child_rel, dom_lower_bnds, contributors)
+    get_set_imprecisions!(FG, nxt_f, nxt_bnd, contributors)
+  else
+    assert(typeof(factor_child_rel) == FactorInte)
+    nxt_f, nxt_bnd = propagate_inte_imprecise_lower(FG, f, factor_child_rel, dom_lower_bnds, contributors)
+    get_set_imprecisions!(FG, nxt_f, nxt_bnd, contributors)
+  end
+end
+
+function propagate_mult_imprecise_lower(FG::FactorGraph, f::Factor, factor_child_rel::FactorMult, dom_lower_bnds::Dict{Domain, SumPolyProdC}, contributors::Dict{Factor, Set{Domain}})
+  # the next factor is the f_mult field of the relation
+  nxt_fact = factor_child_rel.f_mult
+  # what domain in the next factor should we even consider?
+  valid_children = Set{Domain}()
+  # for all the domain in our input, that has imprecise lower bound
+  for f_dom in keys(dom_lower_bnds)
+    # how is it related to its children in the nxt_fact ? there are multiple relationships possible
+    dom_children_rel = FG.rel_domain_children[(f, f_dom)]
+    # for each of the possible relationship
+    for dom_child_rel in dom_children_rel
+      # get the domain of the child
+      child_dom = dom_child_rel.d_mult
+      # consider the child domain only if it is a contributor
+      if child_dom in contributors[nxt_fact]
+        push!(valid_children, child_dom)
+      end
+    end
+  end
+  # now we want to filter the valid children to include only a percentage of the imprecisions they occur!!
+  filtered_children = filter_doms_by_imprecision(FG, nxt_fact, valid_children, contributors, 0.9)
+  nxt_imprecise = Dict{Domain, SumPolyProdC}()
+  # now we have a set of valid children dom that we know we want to consider... for each of them
+  for c_dom in filtered_children
+    parents_rel = FG.rel_domain_parents[nxt_fact, c_dom]
+    factor_parent1 = parents_rel.fmultop.f1
+    factor_parent2 = parents_rel.fmultop.f2
+    poly1 = (if factor_parent1 == f
+               dom_lower_bnds[parents_rel.d1]
+             else
+               factor_parent1.potential_bounds[parents_rel.d1].p_u
+             end)
+    poly2 = (if factor_parent2 == f
+               dom_lower_bnds[parents_rel.d2]
+             else
+               factor_parent2.potential_bounds[parents_rel.d2].p_l
+             end)
+    nxt_imprecise[c_dom] = sppc_mult(poly1, poly2)
+  end
+  nxt_fact, nxt_imprecise
+end
+
+function propagate_inte_imprecise_lower(FG::FactorGraph, f::Factor, factor_child_rel::FactorInte, dom_lower_bnds::Dict{Domain, SumPolyProdC}, contributors::Dict{Factor, Set{Domain}})
+  # the next factor is the f_inte field of the relation
+  nxt_fact = factor_child_rel.f_inte
+  # what domain in the next factor should we even consider?
+  valid_children = Set{Domain}()
+  # for all the domain in our input, that has imprecise lower bound
+  for f_dom in keys(dom_lower_bnds)
+    # how is it related to its children in the nxt_fact ? there are multiple relationships possible
+    dom_children_rel = FG.rel_domain_children[(f, f_dom)]
+    # for each of the possible relationship
+    for dom_child_rel in dom_children_rel
+      # get the domain of the child
+      child_dom = dom_child_rel.d_inte
+      # consider the child domain only if it is a contributor
+      if child_dom in contributors[nxt_fact]
+        push!(valid_children, child_dom)
+      end
+    end
+  end
+  # now we want to filter the valid children to include only a percentage of the imprecisions they occur!!
+  filtered_children = filter_doms_by_imprecision(FG, nxt_fact, valid_children, contributors, 0.9)
+
+  nxt_imprecise = Dict{Domain, SumPolyProdC}()
+  # now we have a set of valid children dom that we know we want to consider... for each of them
+  for c_dom in filtered_children
+    # get the parents
+    parents_rel = FG.rel_domain_parents[nxt_fact, c_dom]
+    inte_var = parents_rel.finteop.inte_var
+    # this is all the parent domain that gets integrated down
+    dom1s = parents_rel.d1s
+    integrated_pots = SumPolyProdC[]
+    # for all the potential parents
+    for s_dom in dom1s
+      bound_left, bound_right = s_dom[findfirst(f.var_order, inte_var)]
+      # if it is a parent that has been made imprecise...
+      if s_dom in keys(dom_lower_bnds)
+        push!(integrated_pots, ∫(dom_lower_bnds[s_dom], inte_var, bound_left, bound_right))
+        # if not, use the upper bound
+      else
+        push!(integrated_pots, ∫(f.potential_bounds[s_dom].p_u, inte_var, bound_left, bound_right))
+      end
+    end
+    imprecise_lower = (if length(integrated_pots) == 1
+                         integrated_pots[1]
+                       else
+                         reduce((x,y)->x+y, integrated_pots)
+                       end
+                       )
+    nxt_imprecise[c_dom] = imprecise_lower
+  end
+  nxt_fact, nxt_imprecise
+end
+
+# given a set of domain, put them in queue and pull fraction of them out based on their imprecisions
+function filter_doms_by_imprecision(FG::FactorGraph, f::Factor, doms::Set{Domain}, contributors::Dict{Factor, Set{Domain}}, fraction::Float64)
+  # the queue contains entries of the form ((factor, domain), cost) : cost
+  cost_queue = Collections.PriorityQueue{((Factor, Domain), Float64), Float64}()
+  total_cost =  0.0
+  for dom in doms
+    cost = get_imprecision!(FG, f, dom, contributors)
+    Collections.enqueue!(cost_queue, ((f,dom),cost), -cost)
+    total_cost += cost
+  end
+  ret = Set{Domain}()
+  cur_cost = 0.0
+  while cur_cost < (total_cost * fraction - 1e-6)
+    f_dom, d_cost = Collections.dequeue!(cost_queue)
+    push!(ret, f_dom[2])
+    cur_cost = cur_cost + d_cost
+  end
+  ret
+end
+
+
+
 # pretend the other bounds are prefect i.e. lower == upper
 # we propagate the imperfect lower bound
 function propagate_imprecise_lower(FG :: FactorGraph, f :: Factor, dom_lower_bnds :: Dict{Domain, SumPolyProdC}, contributors :: Dict{Factor, Set{Domain}})
@@ -518,6 +674,7 @@ function find_imprecise_error(FG :: FactorGraph, f :: Factor, dom_lower_bnds :: 
 end
 
 function find_best_split!(FG :: FactorGraph)
+  @show("hey!")
   last_factor = last(FG.factors)
   upstream_contribution = all_upstream_contributions_rec(last_factor, last_factor.partition)
   all_split_doms = get_valid_split_domains(FG, upstream_contribution)
@@ -538,17 +695,61 @@ function find_best_split!(FG :: FactorGraph)
   cur_f_dom, cur_cost = Collections.dequeue!(cost_queue)
   cur_f, cur_dom = cur_f_dom
   recomputed_cost = find_imprecise_error(FG, cur_f, [cur_dom => cur_f.potential_bounds[cur_dom].p_l], upstream_contribution)
+  @show(cur_cost, recomputed_cost)
   # if the recomputed cost is the same, for SURE we want to split this one!! so we exit the loop
   # however if the recomputed cost is smaller... then we have to update
+  stuck = 0
   while recomputed_cost < (cur_cost - 1e-6)
+    stuck = stuck + 1
+    @show(stuck)
     FG.memoized_cost[(cur_f, cur_dom)] = recomputed_cost
     Collections.enqueue!(cost_queue, ((cur_f, cur_dom), recomputed_cost), -recomputed_cost)
   end
   cur_f, cur_dom
 end
 
+function find_best_split_lazy!(FG :: FactorGraph)
+  @show("hey!")
+  last_factor = last(FG.factors)
+  upstream_contribution = all_upstream_contributions_rec(last_factor, last_factor.partition)
+  all_split_doms = get_valid_split_domains(FG, upstream_contribution)
+
+  # the queue contains entries of the form ((factor, domain), cost) : cost
+  cost_queue = Collections.PriorityQueue{((Factor, Domain), Float64), Float64}()
+  for fact_dom in all_split_doms
+    fact, dom = fact_dom[1], fact_dom[2]
+    if fact_dom in keys(FG.memoized_cost)
+      Collections.enqueue!(cost_queue, ((fact, dom), FG.memoized_cost[fact_dom]), -FG.memoized_cost[fact_dom])
+    else
+      imprecise_err = get_imprecision!(FG, fact, dom, upstream_contribution)
+      Collections.enqueue!(cost_queue, ((fact, dom), imprecise_err), -imprecise_err)
+    end
+  end
+
+  # pop the largest element, and re-computes its cost
+  cur_f_dom, cur_cost = Collections.dequeue!(cost_queue)
+  cur_f, cur_dom = cur_f_dom
+  recomputed_cost = get_imprecision!(FG, cur_f, cur_dom, upstream_contribution)
+  # if the recomputed cost is the same, for SURE we want to split this one!! so we exit the loop
+  # however if the recomputed cost is smaller... then we have to update
+  stuck = 0
+  while recomputed_cost < (cur_cost - 1e-6)
+    stuck = stuck + 1
+    @show(stuck)
+    FG.memoized_cost[(cur_f, cur_dom)] = recomputed_cost
+    Collections.enqueue!(cost_queue, ((cur_f, cur_dom), recomputed_cost), -recomputed_cost)
+
+    # pop the largest element, and re-computes its cost
+    cur_f_dom, cur_cost = Collections.dequeue!(cost_queue)
+    cur_f, cur_dom = cur_f_dom
+    recomputed_cost = get_imprecision!(FG, cur_f, cur_dom, upstream_contribution)
+  end
+  cur_f, cur_dom
+end
+
 function heuristic_grow!(FG :: FactorGraph)
-  best_fact, best_dom = find_best_split!(FG)
+  best_fact, best_dom = find_best_split_lazy!(FG)
+  FG.cost_recent = Set{(Factor, Domain)}()
   factor_grow!(FG, best_fact, best_dom)
 end
 
