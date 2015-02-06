@@ -2,7 +2,6 @@ using Iterators
 using Optim
 include("/home/evan/Documents/research/tofu/Domain.jl")
 include("/home/evan/Documents/research/tofu/Phc.jl")
-using Memoize
 
 # ==================== something that should be put later but we'll fix it later
 immutable STDPolyTerm
@@ -287,7 +286,7 @@ function * (c1 :: Float64, pp1 :: PolyProd)
   PolyProd(c, var_order, polys)
 end
 
-@memoize function ∫ (pp :: PolyProd, x::ASCIIString, a, b)
+function ∫ (pp :: PolyProd, x::ASCIIString, a, b)
   if !(x in pp.var_order)
     PolyProd(pp.c*(b-a), pp.var_order, pp.polys)
   else
@@ -782,12 +781,12 @@ function - (sppc :: SumPolyProdC)
   SumPolyProdC(spp, c)
 end
 
-@memoize function sppc_sub (spp_c1 :: Union(SumPolyProdC, SumPolyProd), spp_c2 :: Union(SumPolyProdC, SumPolyProd))
+function sppc_sub (spp_c1 :: Union(SumPolyProdC, SumPolyProd), spp_c2 :: Union(SumPolyProdC, SumPolyProd))
   spp_c1 + (-spp_c2)
 end
 
 
-@memoize function sppc_mult (sppc1 :: SumPolyProdC, sppc2 :: SumPolyProdC)
+function sppc_mult (sppc1 :: SumPolyProdC, sppc2 :: SumPolyProdC)
   spp1, spp2 = sppc1.spp, sppc2.spp
   c1, c2 = sppc1.c, sppc2.c
   spp = (spp1 * spp2) + (c1 * spp2) + (c2 * spp1)
@@ -795,7 +794,7 @@ end
   SumPolyProdC(spp, c)
 end
 
-@memoize function ∫ (sppc :: SumPolyProdC, x :: ASCIIString, a, b)
+function ∫ (sppc :: SumPolyProdC, x :: ASCIIString, a, b)
   spp, c = sppc.spp, sppc.c
   spp_int = ∫(spp, x, a, b)
   c_int = c * (b - a)

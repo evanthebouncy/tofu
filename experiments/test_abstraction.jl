@@ -20,8 +20,34 @@ dom_x = linspace(dom_small[1][1], dom_small[1][2], 1000)
 dom_y = linspace(dom_small[2][1], dom_small[2][2], 1000)
 
 le_potential = get_potential_from_dist(le_dist)
-lower_poly, upper_poly = get_poly_lower_upper(le_potential, ["x", "y"], dom_small, 1, "approx")
-lower_poly.c
+lower_poly, upper_poly = get_poly_lower_upper(le_potential, ["x", "y"], dom_small, 2, "approx")
+diff = upper_poly - lower_poly
+diffx = ∫(diff, "x", -1.0, 2.0)
+diffxx = diffx.spp
+
+diffy = ∫(diffx, "y", 0.0, 1.0)
+diffy
+peval(diffy, Float64[])
+
+try3 = ∫(∫(diff, "y", 0.0, 1.0), "x", -1.0, 2.0)
+try4 = ∫(∫(diff, "x", -1.0, 2.0), "y", 0.0, 1.0)
+
+peval(try3, Float64[])
+peval(try4, Float64[])
+
+poly_volume(["x", "y"], [(-1.0, 2.0), (0.0,1.0)], diff)
+
+xxx = [(-1.0, 2.0), (0.0,1.0)]
+typeof(xxx)
+yyy = [(-1.0, 2.0), (0.0, 1.0)] :: Domain
+
+spp1 = SumPolyProdC(SumPolyProd(ASCIIString["x","y"],[PolyProd(2.4,ASCIIString["x","y"],["x"=>Poly1([1.0, 1.0, 2.0]),"y"=>Poly1([1.3, 1.0])])]), 2.0)
+peval(spp1, [0.0, 0.0])
+peval(spp1, [1.0, 1.0])
+try1 = ∫(∫(spp1, "y", 0.0, 1.0), "x", -1.0, 2.0)
+try2 = ∫(∫(spp1, "x", -1.0, 2.0), "y", 0.0, 1.0)
+peval(try1, Float64[])
+peval(try2, Float64[])
 
 plot(z=(x,y)->peval(lower_poly,[x,y]), x=dom_x, y=dom_y, Geom.contour)
 plot(z=(x,y)->peval(upper_poly,[x,y]), x=dom_x, y=dom_y, Geom.contour)

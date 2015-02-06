@@ -1,5 +1,7 @@
 include("/home/evan/Documents/research/tofu/Abstraction.jl")
 import Base.isless
+PROP_AMOUNT = 0.9
+Gdict = Dict{Any, Any}()
 
 # a patch is a region along with a polynomial lower and upper bound
 type Patch
@@ -77,6 +79,8 @@ type FactorGraph
   memoized_cost :: Dict{(Factor, Domain), Float64}
   # keep track of if memozied_cost has been recently computed
   cost_recent :: Set{(Factor, Domain)}
+  # keep track of a list of integrals recently computed
+  integral_recent :: Dict{(SumPolyProdC, ASCIIString, Float64, Float64), SumPolyProdC}
 end
 
 # ================================ methods to modify the factor graph and its relations ==================================
@@ -85,7 +89,8 @@ end
 function init_factor_graph()
   FactorGraph(Dict{Factor, Potential}(), Factor[], Dict{Factor,FactorOp}(), Dict{Factor,FactorOp}(),
               Dict{(Factor,Domain), DomainOp}(), Dict{(Factor,Domain),Array{DomainOp}}(),
-              Dict{(Factor, Domain), Float64}(), Set{(Factor, Domain)}())
+              Dict{(Factor, Domain), Float64}(), Set{(Factor, Domain)}(),
+              Dict{(SumPolyProdC, ASCIIString, Float64, Float64), SumPolyProdC}() )
 end
 
 # adding a factor to the list of factors in the FG
@@ -211,9 +216,13 @@ function f_pot_grow!(FG :: FactorGraph, f :: Factor, dom :: Domain)
   end
 end
 
-function rand_f_pot_grow!(FG :: FactorGraph, f :: Factor)
+function rand_f_pot_grow!(FG :: FactorGraph)
+  len = length(FG.factors)
+  rand_id = convert(Int64, round((len-1) * rand())) + 1
+
+  f = FG.factors[rand_id]
   dom_to_grow = find_split_dom(f.bsp.cover_domain, f.partition)
-  f_pot_grow!(FG, f, dom_to_grow)
+  factor_grow!(FG, f, dom_to_grow)
 end
 
 # give a domain, and 2 factors f1 and f2
@@ -261,6 +270,15 @@ function rand_f_mult_grow!(FG :: FactorGraph, f :: Factor)
   f_mult_grow!(FG, f, dom_to_grow)
 end
 
+function ∫_memo (FG::FactorGraph, sppc :: SumPolyProdC, x :: ASCIIString, a, b)
+  if (sppc, x, a, b) in FG.integral_recent
+    FG.integral_recent[(sppc, x, a, b)]
+  else
+    ret = ∫(sppc, x, a, b)
+    FG.integral_recent[(sppc, x, a, b)] = ret
+    ret
+  end
+end
 
 # give a domain, and the factor it integrates from
 function patch_integrate (FG :: FactorGraph, var_order, dom :: Domain, f1 :: Factor, inte_var_name, f_inte :: Factor)
@@ -271,7 +289,7 @@ function patch_integrate (FG :: FactorGraph, var_order, dom :: Domain, f1 :: Fac
     lower, upper = inte_patch.p_l, inte_patch.p_u
     bound_left, bound_right = s_dom[findfirst(f1.var_order, inte_var_name)]
     lower_poly_bnd = ∫(lower, inte_var_name, bound_left, bound_right)
-    upper_poly_bnd = ∫(upper, inte_var_name, bound_left, bound_right)
+    upper_poly_bnd = ∫_memo(FG, upper, inte_var_name, bound_left, bound_right)
     push!(integrated_pots, (lower_poly_bnd, upper_poly_bnd))
   end
   lower_pol, upper_pol = (if length(integrated_pots) == 1
@@ -372,6 +390,7 @@ function one_step_upstream_contribution(factor :: Factor, doms :: Set{Domain})
 end
 
 function all_upstream_contributions_rec(factor :: Factor, doms :: Set{Domain})
+  # println("upstream contribution of ", factor.f_name)
   attempt_upstream = one_step_upstream_contribution(factor, doms)
   if (attempt_upstream == Nothing())
     [factor => doms]
@@ -405,7 +424,7 @@ function get_imprecision!(FG :: FactorGraph ,f :: Factor, dom :: Domain, contrib
   if (f, dom) in FG.cost_recent
     FG.memoized_cost[(f, dom)]
   else
-    ret_imprecision = get_set_imprecisions!(FG, f, [dom => f.potential_bounds[dom].p_l], contributors)
+    ret_imprecision = get_set_imprecisions!(FG, f, [dom => f.potential_bounds[dom].p_l], contributors, 1.0)
     FG.memoized_cost[(f, dom)] = ret_imprecision
     ret_imprecision
   end
@@ -413,7 +432,7 @@ end
 
 # given a factor and a set of domains in it, find out the imprecision
 # of them all the way to the bottom
-function get_set_imprecisions!(FG::FactorGraph, f::Factor, dom_lower_bnds::Dict{Domain, SumPolyProdC}, contributors::Dict{Factor, Set{Domain}})
+function get_set_imprecisions!(FG::FactorGraph, f::Factor, dom_lower_bnds::Dict{Domain, SumPolyProdC}, contributors::Dict{Factor, Set{Domain}}, relative_weight::Float64)
   if !(f in keys(FG.rel_factor_child))
     final_bnd, final_f = dom_lower_bnds, f
     dom_sppcs = [(final_dom, sppc_sub(final_f.potential_bounds[final_dom].p_u, final_bnd[final_dom])) for final_dom in keys(final_bnd)]
@@ -421,17 +440,17 @@ function get_set_imprecisions!(FG::FactorGraph, f::Factor, dom_lower_bnds::Dict{
     if length(volumes) == 0
       return 0.0
     end
-    return reduce((x,y)->x+y, volumes)
+    return reduce((x,y)->x+y, volumes) * relative_weight
   end
 
   factor_child_rel = FG.rel_factor_child[f]
   if typeof(factor_child_rel) == FactorMult
-    nxt_f, nxt_bnd = propagate_mult_imprecise_lower(FG, f, factor_child_rel, dom_lower_bnds, contributors)
-    get_set_imprecisions!(FG, nxt_f, nxt_bnd, contributors)
+    nxt_f, nxt_bnd, nxt_relative_weight = propagate_mult_imprecise_lower(FG, f, factor_child_rel, dom_lower_bnds, contributors)
+    get_set_imprecisions!(FG, nxt_f, nxt_bnd, contributors, relative_weight * nxt_relative_weight)
   else
     assert(typeof(factor_child_rel) == FactorInte)
-    nxt_f, nxt_bnd = propagate_inte_imprecise_lower(FG, f, factor_child_rel, dom_lower_bnds, contributors)
-    get_set_imprecisions!(FG, nxt_f, nxt_bnd, contributors)
+    nxt_f, nxt_bnd, nxt_relative_weight = propagate_inte_imprecise_lower(FG, f, factor_child_rel, dom_lower_bnds, contributors)
+    get_set_imprecisions!(FG, nxt_f, nxt_bnd, contributors, relative_weight * nxt_relative_weight)
   end
 end
 
@@ -455,7 +474,7 @@ function propagate_mult_imprecise_lower(FG::FactorGraph, f::Factor, factor_child
     end
   end
   # now we want to filter the valid children to include only a percentage of the imprecisions they occur!!
-  filtered_children = filter_doms_by_imprecision(FG, nxt_fact, valid_children, contributors, 0.9)
+  filtered_children, relative_weight = filter_doms_by_imprecision(FG, nxt_fact, valid_children, contributors, PROP_AMOUNT)
   nxt_imprecise = Dict{Domain, SumPolyProdC}()
   # now we have a set of valid children dom that we know we want to consider... for each of them
   for c_dom in filtered_children
@@ -474,7 +493,7 @@ function propagate_mult_imprecise_lower(FG::FactorGraph, f::Factor, factor_child
              end)
     nxt_imprecise[c_dom] = sppc_mult(poly1, poly2)
   end
-  nxt_fact, nxt_imprecise
+  nxt_fact, nxt_imprecise, relative_weight
 end
 
 function propagate_inte_imprecise_lower(FG::FactorGraph, f::Factor, factor_child_rel::FactorInte, dom_lower_bnds::Dict{Domain, SumPolyProdC}, contributors::Dict{Factor, Set{Domain}})
@@ -497,7 +516,7 @@ function propagate_inte_imprecise_lower(FG::FactorGraph, f::Factor, factor_child
     end
   end
   # now we want to filter the valid children to include only a percentage of the imprecisions they occur!!
-  filtered_children = filter_doms_by_imprecision(FG, nxt_fact, valid_children, contributors, 0.9)
+  filtered_children, relative_weight = filter_doms_by_imprecision(FG, nxt_fact, valid_children, contributors, PROP_AMOUNT)
 
   nxt_imprecise = Dict{Domain, SumPolyProdC}()
   # now we have a set of valid children dom that we know we want to consider... for each of them
@@ -516,7 +535,7 @@ function propagate_inte_imprecise_lower(FG::FactorGraph, f::Factor, factor_child
         push!(integrated_pots, ∫(dom_lower_bnds[s_dom], inte_var, bound_left, bound_right))
         # if not, use the upper bound
       else
-        push!(integrated_pots, ∫(f.potential_bounds[s_dom].p_u, inte_var, bound_left, bound_right))
+        push!(integrated_pots, ∫_memo(FG, f.potential_bounds[s_dom].p_u, inte_var, bound_left, bound_right))
       end
     end
     imprecise_lower = (if length(integrated_pots) == 1
@@ -527,7 +546,7 @@ function propagate_inte_imprecise_lower(FG::FactorGraph, f::Factor, factor_child
                        )
     nxt_imprecise[c_dom] = imprecise_lower
   end
-  nxt_fact, nxt_imprecise
+  nxt_fact, nxt_imprecise, relative_weight
 end
 
 # given a set of domain, put them in queue and pull fraction of them out based on their imprecisions
@@ -537,17 +556,24 @@ function filter_doms_by_imprecision(FG::FactorGraph, f::Factor, doms::Set{Domain
   total_cost =  0.0
   for dom in doms
     cost = get_imprecision!(FG, f, dom, contributors)
+#     cost = (if (f, dom) in keys(FG.memoized_cost)
+#               FG.memoized_cost[(f, dom)]
+#             else
+#               get_imprecision!(FG, f, dom, contributors)
+#             end
+#             )
     Collections.enqueue!(cost_queue, ((f,dom),cost), -cost)
+
     total_cost += cost
   end
   ret = Set{Domain}()
   cur_cost = 0.0
-  while cur_cost < (total_cost * fraction - 1e-6)
+  while (cur_cost < (total_cost * fraction - 1e-6)) & (length(cost_queue) > 0)
     f_dom, d_cost = Collections.dequeue!(cost_queue)
     push!(ret, f_dom[2])
     cur_cost = cur_cost + d_cost
   end
-  ret
+  ret, cur_cost / total_cost
 end
 
 
@@ -674,7 +700,6 @@ function find_imprecise_error(FG :: FactorGraph, f :: Factor, dom_lower_bnds :: 
 end
 
 function find_best_split!(FG :: FactorGraph)
-  @show("hey!")
   last_factor = last(FG.factors)
   upstream_contribution = all_upstream_contributions_rec(last_factor, last_factor.partition)
   all_split_doms = get_valid_split_domains(FG, upstream_contribution)
@@ -709,10 +734,12 @@ function find_best_split!(FG :: FactorGraph)
 end
 
 function find_best_split_lazy!(FG :: FactorGraph)
-  @show("hey!")
   last_factor = last(FG.factors)
   upstream_contribution = all_upstream_contributions_rec(last_factor, last_factor.partition)
+  Gdict["upstream_controbution"] = upstream_contribution
   all_split_doms = get_valid_split_domains(FG, upstream_contribution)
+
+  Gdict["all_split_doms"] = all_split_doms
 
   # the queue contains entries of the form ((factor, domain), cost) : cost
   cost_queue = Collections.PriorityQueue{((Factor, Domain), Float64), Float64}()
@@ -744,120 +771,15 @@ function find_best_split_lazy!(FG :: FactorGraph)
     cur_f, cur_dom = cur_f_dom
     recomputed_cost = get_imprecision!(FG, cur_f, cur_dom, upstream_contribution)
   end
+  println("cost is ", recomputed_cost)
   cur_f, cur_dom
 end
 
 function heuristic_grow!(FG :: FactorGraph)
   best_fact, best_dom = find_best_split_lazy!(FG)
+  println(best_fact.f_name, "    ", best_dom)
   FG.cost_recent = Set{(Factor, Domain)}()
+  FG.integral_recent = Dict{(SumPolyProdC, ASCIIString, Float64, Float64), SumPolyProdC}()
+
   factor_grow!(FG, best_fact, best_dom)
-end
-
-# ============== DUMPSTER ===============
-# make a factor by having a different partition (maybe coarser)
-function abstract_factor(f :: Factor, p :: Partition, bnd_method="exact", deg=2)
-  lower_fun(x...) = feval_lower(f, [x...])
-  upper_fun(x...) = feval_upper(f, [x...])
-  var_order = f.var_order
-
-  potential_bounds = Dict{Domain, (SumPolyProdC, SumPolyProdC)}()
-  for dom in p
-    # the two spp approximations
-    spp_approx_lower = get_m_projections_approx(lower_fun, var_order, deg, dom)
-    spp_approx_upper = get_m_projections_approx(upper_fun, var_order, deg, dom)
-
-    # try to figure out how to shift those 2 approximations to get sound results
-    intersected_doms = filter(x->has_intersect(x,dom), keys(f.potential_bounds))
-    shift_down = 0.0
-    shift_up = 0.0
-
-    # for all the original factor's dom that intersect with this dom in p
-    for x in intersected_doms
-      # get the intersection dom of the 2 overlapping doms
-      common_dom = get_intersect(x, dom)
-      # compute the diff of the 2 polynomial bounds for each lower / upper bound
-      shift_down_poly = spp_approx_lower - f.potential_bounds[x][1]
-      shift_up_poly = f.potential_bounds[x][2] - spp_approx_upper
-      # and turn them into their numerical versions
-      shift_down_poly_enum(x) = peval(shift_down_poly, [x...])
-      shift_up_poly_enum(x) = eval(shift_up_poly, [x...])
-      # compute now how much needs to be shifted to perserve soundness
-      # compute it over the common dom where both polynomials share
-      cur_shift_down = (if bnd_method == "exact"
-                          get_max_value_exact(shift_down_poly, common_dom)
-                        else
-                          get_max_value_approx(shift_down_poly_enum, common_dom)
-                        end
-                        )
-      shift_down = max(shift_down, cur_shift_down)
-      cur_shift_up = (if bnd_method == "exact"
-                        get_max_value_exact(shift_down_poly, common_dom)
-                      else
-                        get_max_value_approx(shift_down_poly_enum, common_dom)
-                      end
-                      )
-      shift_up = max(shift_up, cur_shift_up)
-    end
-    lower_poly = SumPolyProdC(spp_approx_lower, -1.0 * shift_down)
-    upper_poly = SumPolyProdC(spp_approx_upper, shift_up)
-
-    lowest_of_lower = lowest_possible(lower_poly, dom, bnd_method)
-    lower_poly = (if lowest_of_lower < 0.0
-                    make_zero(lower_poly)
-                  else
-                    lower_poly
-                  end
-                  )
-
-    potential_bounds[dom] = lower_poly, upper_poly
-  end
-  Factor(var_order, potential_bounds)
-end
-
-
-function * (f1 :: Factor, f2 :: Factor)
-  var_order = merge_varorder(f1.var_order, f2.var_order)
-  potential_bounds = Dict{Domain, (SumPolyProdC, SumPolyProdC)}()
-  for dom1 in keys(f1.potential_bounds)
-    for dom2 in keys(f2.potential_bounds)
-      dom1_enlarged = enlarge_dom_dim(f1.var_order, var_order, dom1)
-      dom2_enlarged = enlarge_dom_dim(f2.var_order, var_order, dom2)
-      if has_intersect(dom1_enlarged, dom2_enlarged)
-        dom_common = get_intersect(dom1_enlarged, dom2_enlarged)
-        lower1, upper1 = f1.potential_bounds[dom1]
-        lower2, upper2 = f2.potential_bounds[dom2]
-        potential_bounds[dom_common] = (lower1*lower2, upper1*upper2)
-      end
-    end
-  end
-  Factor(var_order, potential_bounds)
-end
-
-function ∫ (f :: Factor, inte_var_name :: ASCIIString)
-  var_order = filter(x->x!=inte_var_name, f.var_order)
-  # project the partition on f into a lower dimension while keeping track of where each new domain in the partition
-  # is an intersection of what in the old place
-  projected_partition_map = partition_projection(f.var_order, var_order, inte_var_name, keys(f.potential_bounds))
-  # we attempt to integrate the lower/upper bounds from all the original partitions, and cache the results
-  cached_int_potential_bounds = Dict{Domain, (SumPolyProdC, SumPolyProdC)}()
-  for s_dom in keys(f.potential_bounds)
-    lower, upper = f.potential_bounds[s_dom]
-    bound_left, bound_right = s_dom[findfirst(f.var_order, inte_var_name)]
-    lower_poly_bnd = ∫(lower, inte_var_name, bound_left, bound_right)
-    upper_poly_bnd = ∫(upper, inte_var_name, bound_left, bound_right)
-    cached_int_potential_bounds[s_dom] = (lower_poly_bnd, upper_poly_bnd)
-  end
-
-  potential_bounds = Dict{Domain, (SumPolyProdC, SumPolyProdC)}()
-  for intersected_dom in keys(projected_partition_map)
-    dom_sources = Domain[projected_partition_map[intersected_dom]...]
-    if (length(dom_sources)) == 1
-      potential_bounds[intersected_dom] = cached_int_potential_bounds[dom_sources[1]]
-    else
-      inted_lower_uppers = (SumPolyProdC, SumPolyProdC)[cached_int_potential_bounds[dom_source] for dom_source in dom_sources]
-      comebine_pair(l1_u1::(SumPolyProdC,SumPolyProdC), l2_u2::(SumPolyProdC,SumPolyProdC)) = (l1_u1[1]+l2_u2[1], l1_u1[2]+l2_u2[2])
-      potential_bounds[intersected_dom] = reduce(comebine_pair, inted_lower_uppers)
-    end
-  end
-  Factor(var_order, potential_bounds)
 end

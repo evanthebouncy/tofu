@@ -1,4 +1,3 @@
-using ProfileView
 include("/home/evan/Documents/research/tofu/Factor.jl")
 
 bigdom = (0.0, 16.0) :: (Float64, Float64)
@@ -43,4 +42,3 @@ draw_dom2d(f_eq.partition)
 layer1 = layer((x)->feval_lower(f_inte1,[x]), bigdom...)
 layer2 = layer((x)->feval_upper(f_inte1,[x]), bigdom...)
 plot(layer1, layer2)
-
