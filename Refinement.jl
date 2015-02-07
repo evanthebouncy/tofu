@@ -1,5 +1,5 @@
 include("/home/evan/Documents/research/tofu/Factor.jl")
-PROP_AMOUNT = 0.9
+PROP_AMOUNT = 0.75
 Gdict = Dict{Any, Any}()
 
 # the baseline random strategy for growth
@@ -86,8 +86,8 @@ function get_valid_split_domains(FG::FactorGraph, upstreams_contribution::Dict{F
       f_mult = f_type.f_mult
       shrink1 = diminish_dom_dim(f_mult.var_order, f1.var_order, dom)
       shrink2 = diminish_dom_dim(f_mult.var_order, f2.var_order, dom)
-      best_cover1 = best_covering(shrink1, keys(f1.potential_bounds))
-      best_cover2 = best_covering(shrink2, keys(f2.potential_bounds))
+      best_cover1 = best_covering(shrink1, f1.bsp)
+      best_cover2 = best_covering(shrink2, f2.bsp)
       return [f1=>Set{Domain}(Domain[best_cover1]),
        f2=>Set{Domain}(Domain[best_cover2])]
     end

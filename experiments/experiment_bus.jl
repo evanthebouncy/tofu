@@ -1,4 +1,4 @@
-include("/home/evan/Documents/research/tofu/Factor.jl")
+include("/home/evan/Documents/research/tofu/Refinement.jl")
 
 bigdom = (0.0, 60.0) :: (Float64, Float64)
 dom_x = linspace(bigdom..., 1000)
@@ -10,7 +10,7 @@ function initialize_test ()
   dom_y = linspace(bigdom..., 1000)
 
   const_pot = get_potential_from_dist(get_const_dist(10.0))
-  const_pot2 = get_potential_from_dist(get_const_dist(20.0))
+  ob_pot = get_potential_from_dist(get_const_dist(20.0))
   plus_pot = get_potential_from_dist(plus_dist)
 
   FG = init_factor_graph()
@@ -18,7 +18,7 @@ function initialize_test ()
   # our constant c is 20
   f_const = f_pot(FG, "f_c", const_pot, ["c"], (Float64,Float64)[bigdom for i in 1:1], "approx", 2)
   # our observation is 10
-  f_ob = f_pot(FG, "f_ob", const_pot2, ["ob"], (Float64,Float64)[bigdom for i in 1:1], "approx", 2)
+  f_ob = f_pot(FG, "f_ob", ob_pot, ["ob"], (Float64,Float64)[bigdom for i in 1:1], "approx", 2)
   # end = start + 20
   f_plus1 = f_pot(FG, "f_plus", plus_pot, ["end", "start", "c"], (Float64,Float64)[bigdom for i in 1:3], "approx", 2)
   # the observation is drawn from uniform

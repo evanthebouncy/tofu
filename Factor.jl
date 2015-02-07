@@ -241,8 +241,8 @@ end
 function patch_mult (FG :: FactorGraph, var_order, dom :: Domain, f1 :: Factor, f2 :: Factor, f_mult :: Factor)
   shrink1 = diminish_dom_dim(var_order, f1.var_order, dom)
   shrink2 = diminish_dom_dim(var_order, f2.var_order, dom)
-  best_cover1 = best_covering(shrink1, keys(f1.potential_bounds))
-  best_cover2 = best_covering(shrink2, keys(f2.potential_bounds))
+  best_cover1 = best_covering(shrink1, f1.bsp)
+  best_cover2 = best_covering(shrink2, f2.bsp)
   patch1, patch2 = f1.potential_bounds[best_cover1], f2.potential_bounds[best_cover2]
   p_l = sppc_mult(patch1.p_l, patch2.p_l)
   p_u = sppc_mult(patch1.p_u, patch2.p_u)

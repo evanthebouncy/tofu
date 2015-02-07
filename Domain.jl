@@ -201,20 +201,6 @@ function shatter_partition!(dom :: Domain, partition :: Partition)
   shattered_doms
 end
 
-# find the most suitable covering of a dom from a set of Doms
-# todo: use binary search for more efficient search
-function best_covering(dom :: Domain, doms)
-  can_cover = filter(x->dom_subset(dom, x), doms)
-  best_length = Inf
-  best_dom = None
-  for d1 in can_cover
-    if max_length(d1) < best_length
-      best_length = max_length(d1)
-      best_dom = d1
-    end
-  end
-  best_dom
-end
 
 # check if a value slices a domain
 function value_slices(var_order, var_name, value, dom)
@@ -315,6 +301,26 @@ function find_smallest_cover(bsp :: BSP, target_domain :: Domain, small_var_orde
         else
           Domain[bsp.cover_domain]
         end
+      end
+    end
+  end
+end
+
+
+# find the most suitable covering of a dom from a set of Doms
+function best_covering(dom :: Domain, bsp :: BSP)
+  # if base case, it is what it is
+  if typeof(bsp.left) == Leaf
+    bsp.cover_domain
+  else
+    # otherwise, try to walk down either left or right, but if neither, return self domain
+    if dom_subset(dom, bsp.left.cover_domain)
+      best_covering(dom, bsp.left)
+    else
+      if dom_subset(dom, bsp.right.cover_domain)
+        best_covering(dom, bsp.right)
+      else
+        bsp.cover_domain
       end
     end
   end
