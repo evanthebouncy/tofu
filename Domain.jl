@@ -137,19 +137,6 @@ end
 
 # FUNCTION CONCERNING PARTITIONS =====================
 
-##### drawing a 2d domain
-function draw_dom2d(doms)
-  doms = [d for d in doms]
-  color = [rand() * 1000 for i in doms]
-  x_min = Float64[x[1][1] for x in doms]
-  x_max = Float64[x[1][2] for x in doms]
-  y_min = Float64[x[2][1] for x in doms]
-  y_max = Float64[x[2][2] for x in doms]
-  plot(x_max = x_max, x_min = x_min, y_max = y_max, y_min = y_min,
-       color=color,
-       Geom.rectbin)
-end
-
 # p1 and p2 are both partitions of some domain
 # give the intersection/overlaps of these 2 partitions
 function partition_intersect(p1, p2)
