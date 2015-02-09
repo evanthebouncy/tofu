@@ -1,5 +1,5 @@
 include("/home/evan/Documents/research/tofu/Factor.jl")
-PROP_AMOUNT = 0.75
+PROP_AMOUNT = 1.0
 Gdict = Dict{Any, Any}()
 
 # the baseline random strategy for growth
@@ -114,10 +114,11 @@ function get_valid_split_domains(FG::FactorGraph, upstreams_contribution::Dict{F
       push!(ret, f_dom)
     else
       # otherwise, we attempt to shatter it first...
-      shattered_doms = shatter(dom)
+      #shattered_doms_and_me = Domain[shatter(dom)..., dom]
+      shattered_doms_and_me = Domain[shatter(dom)...]
       # get the parents for the factor...
       f_type = FG.rel_factor_parents[factor]
-      shattered_parents = Dict{Factor, Set{Domain}}[get_parent_doms(shat_d, f_type) for shat_d in shattered_doms]
+      shattered_parents = Dict{Factor, Set{Domain}}[get_parent_doms(shat_d, f_type) for shat_d in shattered_doms_and_me]
       # for debugging
       # Gdict["sp$(factor.f_name)"] = shattered_parents
       # println("showing parents ", shattered_parents)
@@ -276,7 +277,7 @@ function filter_doms_by_imprecision(FG::FactorGraph, f::Factor, doms::Set{Domain
 #             else
 #               get_imprecision!(FG, f, dom, contributors)
 #             end
-#             )
+#            )
     Collections.enqueue!(cost_queue, ((f,dom),cost), -cost)
 
     total_cost += cost
@@ -568,4 +569,26 @@ function draw_f_imprecision1d(FG, f)
   plot(x_max = x_max, x_min = x_min, y_max = y_max, y_min = y_min,
        color=color,
        Geom.rectbin)
+end
+
+function give_sorted_partition_imprecision(FG)
+ last_factor = last(FG.factors)
+  upstream_contribution = all_upstream_contributions_rec(last_factor, last_factor.partition)
+  Gdict["upstream_controbution"] = upstream_contribution
+  all_split_doms = get_valid_split_domains(FG, upstream_contribution)
+
+  Gdict["all_split_doms"] = all_split_doms
+
+  # the queue contains entries of the form ((factor, domain), cost) : cost
+  cost_queue = Collections.PriorityQueue{((Factor, Domain), Float64), Float64}()
+  for fact_dom in all_split_doms
+    fact, dom = fact_dom[1], fact_dom[2]
+    if fact_dom in keys(FG.memoized_cost)
+      Collections.enqueue!(cost_queue, ((fact, dom), FG.memoized_cost[fact_dom]), -FG.memoized_cost[fact_dom])
+    else
+      imprecise_err = get_imprecision!(FG, fact, dom, upstream_contribution)
+      Collections.enqueue!(cost_queue, ((fact, dom), imprecise_err), -imprecise_err)
+    end
+  end
+  cost_queue
 end

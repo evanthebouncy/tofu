@@ -46,10 +46,12 @@ end
 
 FG = initialize_test()
 
-heuristic_grow!(FG)
+function displayshit(x)
+  println(x[1][1].f_name, " ", x[1][2], " ", x[2])
+end
 
 function profile_test()
-  for i in 1:2000
+  for i in 1:10
     println(i)
     heuristic_grow!(FG)
   end
@@ -57,9 +59,13 @@ end
 
 profile_test()
 
+yada = give_sorted_partition_imprecision(FG)
+
+displayshit(Collections.dequeue!(yada))
+
 # Profile.init(10^8, 0.1)
 # Profile.clear()
-# profile_test()
+# @profile profile_test()
 # using ProfileView
 # ProfileView.view()
 
@@ -70,5 +76,9 @@ layer2 = layer((x)->feval_upper(last(FG.factors),[x]), bigdom...)
 plot(layer1, layer2)
 
 
+draw_dom1d(last(FG.factors).partition)
 
+for f in FG.factors
+  println(f.f_name, "    ", length(f.partition))
+end
 

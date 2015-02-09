@@ -13,10 +13,13 @@ f_eq = f_pot(FG, "f_eq", eq_pot,["y", "x"],(Float64,Float64)[bigdom for i in 1:2
 f_mult1 = f_mult(FG, "f_mult1", f_const, f_eq, (Float64,Float64)[bigdom for i in 1:2])
 f_inte1 = f_inte(FG, "f_inte1", f_mult1, "x", (Float64,Float64)[bigdom for i in 1:1])
 
-for i in 1:1
+for i in 1:100
   @show(i)
   heuristic_grow!(FG)
 end
+
+Gdict
+FG.memoized_cost
 
 using Gadfly
 
@@ -39,4 +42,16 @@ draw_f_imprecision1d(FG, f_inte1)
 layer1 = layer((x)->feval_lower(f_inte1,[x]), bigdom...)
 layer2 = layer((x)->feval_upper(f_inte1,[x]), bigdom...)
 plot(layer1, layer2)
+
+shatter([(0.0, 8.0),(0.0, 8.0)])
+
+thing1 = [f_inte1 => Set(Domain[f_inte1.bsp.cover_domain, f_mult1.bsp.cover_domain])]
+thing2 = [f_inte1 => Set(Domain[f_inte1.bsp.cover_domain, f_const.bsp.cover_domain])]
+
+thing1 == thing2
+
+
+for f in FG.factors
+  println(f.f_name, "    ", length(f.partition))
+end
 
