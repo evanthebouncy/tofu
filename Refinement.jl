@@ -552,6 +552,14 @@ function draw_f_imprecision2d(FG, f)
        Geom.rectbin)
 end
 
+function draw_f_countour_2d(FG, f)
+  dom = f.bsp.cover_domain
+  dom_xx, dom_yy = dom[1], dom[2]
+  dom_x = linspace(dom_xx..., 1000)
+  dom_y = linspace(dom_yy..., 1000)
+  plot(z=(x,y)->feval_upper(f,[x,y]), x=dom_x, y=dom_y, Geom.contour)
+end
+
 function draw_f_imprecision1d(FG, f)
   doms = [d for d in f.partition]
   color = [

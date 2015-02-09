@@ -13,10 +13,14 @@ f_eq = f_pot(FG, "f_eq", eq_pot,["y", "x"],(Float64,Float64)[bigdom for i in 1:2
 f_mult1 = f_mult(FG, "f_mult1", f_const, f_eq, (Float64,Float64)[bigdom for i in 1:2])
 f_inte1 = f_inte(FG, "f_inte1", f_mult1, "x", (Float64,Float64)[bigdom for i in 1:1])
 
-for i in 1:100
+for i in 1:1
   @show(i)
   heuristic_grow!(FG)
 end
+
+childrens = FG.rel_domain_children
+parents = FG.rel_domain_parents
+
 
 Gdict
 FG.memoized_cost
@@ -30,9 +34,13 @@ draw_dom2d(f_eq.partition)
 
 draw_f_imprecision2d(FG, f_eq)
 
+draw_f_countour_2d(FG, f_eq)
+
 draw_dom2d(f_mult1.partition)
 
 draw_f_imprecision2d(FG, f_mult1)
+
+draw_f_countour_2d(FG, f_mult1)
 
 draw_dom1d(f_inte1.partition)
 
@@ -54,4 +62,6 @@ thing1 == thing2
 for f in FG.factors
   println(f.f_name, "    ", length(f.partition))
 end
+
+show(3)
 

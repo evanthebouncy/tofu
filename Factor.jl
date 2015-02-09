@@ -1,5 +1,7 @@
 include("/home/evan/Documents/research/tofu/Abstraction.jl")
 import Base.isless
+import Base.==
+import Base.show
 
 # a patch is a region along with a polynomial lower and upper bound
 type Patch
@@ -21,17 +23,23 @@ end
 
 # factors are un-ordered by default ...
 isless(f1::Factor, f2::Factor) = true
+function show(io::IO, f::Factor)
+    print(io,f.f_name)
+end
 
 # this keeps relationships between factors as operations Mult, and Inte
 abstract FactorOp
 
-type FactorMult <: FactorOp
+immutable FactorMult <: FactorOp
   f1 :: Factor
   f2 :: Factor
   f_mult :: Factor
 end
+function show(io::IO, fM::FactorMult)
+  print(io,"FactorMult($(fM.f1.f_name), $(fM.f2.f_name), $(fM.f_mult.f_name))")
+end
 
-type FactorInte <: FactorOp
+immutable FactorInte <: FactorOp
   f1 :: Factor
   inte_var :: ASCIIString
   f_inte :: Factor
@@ -40,19 +48,31 @@ end
 # this is analegous relationship
 abstract DomainOp
 
-type DomainMult <: DomainOp
+immutable DomainMult <: DomainOp
   fmultop :: FactorMult
   d1 :: Domain
   d2 :: Domain
   d_mult :: Domain
 end
 
-type DomainInte <: DomainOp
+function == (dop1::DomainMult, dop2::DomainMult)
+  (dop1.fmultop == dop2.fmultop) &
+    (dop1.d1 == dop2.d1) &
+    (dop1.d2 == dop2.d2) &
+    (dop1.d_mult == dop2.d_mult)
+end
+
+immutable DomainInte <: DomainOp
   finteop :: FactorInte
   d1s :: Array{Domain}
   d_inte :: Domain
 end
 
+function == (dop1::DomainInte, dop2::DomainInte)
+  (dop1.finteop == dop2.finteop) &
+    (dop1.d1s == dop2.d1s) &
+    (dop1.d_inte == dop2.d_inte)
+end
 
 # A collection of Factors and their relationships (and the domain relationships)
 type FactorGraph
@@ -105,6 +125,12 @@ function add_rel_domain_children!(FG :: FactorGraph, f :: Factor, d :: Domain, d
   push!(FG.rel_domain_children[key], dop)
 end
 
+function remove_rel_domain_children!(FG::FactorGraph, f::Factor, d::Domain, dop::DomainOp)
+  key = (f, d)
+  old_children_list = FG.rel_domain_children[key]
+  FG.rel_domain_children[key] = filter(x->x!=dop, old_children_list)
+end
+
 # add a relation domainOP to the factor graph
 function add_rel_domain!(FG :: FactorGraph, d_op :: DomainOp)
   if typeof(d_op) == DomainMult
@@ -117,6 +143,24 @@ function add_rel_domain!(FG :: FactorGraph, d_op :: DomainOp)
     FG.rel_domain_parents[(d_op.finteop.f_inte, d_op.d_inte)] = d_op
     for p_domain in d_op.d1s
       add_rel_domain_children!(FG, d_op.finteop.f1, p_domain, d_op)
+    end
+    return
+  end
+  assert(false)
+end
+
+# remove a relation domainOP from the factor graph
+function remove_rel_domain!(FG::FactorGraph, d_op::DomainOp)
+  if typeof(d_op) == DomainMult
+    delete!(FG.rel_domain_parents, (d_op.fmultop.f_mult, d_op.d_mult))
+    remove_rel_domain_children!(FG, d_op.fmultop.f1, d_op.d1, d_op)
+    remove_rel_domain_children!(FG, d_op.fmultop.f2, d_op.d2, d_op)
+    return
+  end
+  if typeof(d_op) == DomainInte
+    delete!(FG.rel_domain_parents, (d_op.finteop.f_inte, d_op.d_inte))
+    for p_domain in d_op.d1s
+      remove_rel_domain_children!(FG, d_op.finteop.f1, p_domain, d_op)
     end
     return
   end
@@ -201,6 +245,46 @@ function shatter!(var_order, dom :: Domain, p :: Partition, bsp :: BSP)
   shatter!_rec(var_order, Domain[dom], p, bsp, length(var_order))
 end
 
+# rewire the children parent relationship. Given a parent that's been shattered, rewire its children for better fit
+# also computes a set of better bounds for the children's patches, and give the children's domain->patch dictionary upon return
+function rewire!(p_fact::Factor, p_dom::Domain, shattered_doms::Array{Domain})
+  println("rewiring")
+  old_children_rels = FG.rel_domain_children[(p_fact, p_dom)]
+  # erase all the old childrens relation from FG
+  for old_child_rel in old_children_rels
+    remove_rel_domain!(FG, old_child_rel)
+  end
+  # repopulate the child_relation by recomputing the patch
+  type1 = old_children_rels[1]
+  println(typeof(type1))
+  if typeof(type1) == DomainMult
+    println("detected mult")
+    ret = Dict{Domain, Patch}()
+    fact_rel_type = type1.fmultop
+    f_mult, f1, f2 = fact_rel_type.f_mult, fact_rel_type.f1, fact_rel_type.f2
+    for old_child_rel in old_children_rels
+      dom_mult = old_child_rel.d_mult
+      new_patch = patch_mult(FG, f_mult.var_order, dom_mult, f1, f2, f_mult)
+      f_mult.potential_bounds[dom_mult] = new_patch
+      ret[dom_mult] = new_patch
+    end
+    return ret
+  end
+  if typeof(type1) == DomainInte
+    println("detected inte")
+    ret = Dict{Domain, Patch}()
+    fact_rel_type = type1.finteop
+    f1, inte_var, f_inte = fact_rel_type.f1, fact_rel_type.inte_var, fact_rel_type.f_inte
+    for old_child_rel in old_children_rels
+      dom_inte = old_child_rel.d_inte
+      new_patch = patch_integrate(FG, f_inte.var_order, dom_inte, f1, inte_var, f_inte)
+      f_inte.potential_bounds[dom_inte] = new_patch
+      ret[dom_inte] = new_patch
+    end
+    return ret
+  end
+end
+
 # make a patch from a potential function
 function patch_pot(FG :: FactorGraph, var_order, dom :: Domain, pot :: Potential, bnd_method="approx", deg=2)
   lower_poly, upper_poly = get_poly_lower_upper(pot, var_order, dom, deg, bnd_method)
@@ -235,6 +319,7 @@ function f_pot_grow!(FG :: FactorGraph, f :: Factor, dom :: Domain)
   for d1 in shattered_doms
     f.potential_bounds[d1] = patch_pot(FG, f.var_order, d1, pot, "approx", 2)
   end
+  shattered_doms
 end
 
 # give a domain, and 2 factors f1 and f2
@@ -275,6 +360,7 @@ function f_mult_grow!(FG :: FactorGraph, f :: Factor, dom :: Domain)
   for d1 in shattered_doms
     f.potential_bounds[d1] = patch_mult(FG, f.var_order, d1, f1, f2, f)
   end
+  shattered_doms
 end
 
 function ∫_memo (FG::FactorGraph, sppc :: SumPolyProdC, x :: ASCIIString, a, b)
@@ -334,22 +420,28 @@ function f_inte_grow!(FG :: FactorGraph, f :: Factor, dom :: Domain)
   for d1 in shattered_doms
     f.potential_bounds[d1] = patch_integrate(FG, f.var_order, d1, f1, inte_var_name, f)
   end
+  shattered_doms
 end
 
 function factor_grow!(FG :: FactorGraph, f :: Factor, dom :: Domain)
+  shattered_doms = Domain[]
   # if it is a source potential factor
   if f in keys(FG.potentials)
-    f_pot_grow!(FG, f, dom)
+    shattered_doms = f_pot_grow!(FG, f, dom)
   # if it is not a source, it has parents
   else
     f_parent_rel = FG.rel_factor_parents[f]
     # if it is a multiplication ...
     if typeof(f_parent_rel) == FactorMult
-      f_mult_grow!(FG, f, dom)
+      shattered_doms = f_mult_grow!(FG, f, dom)
       # otherwise it is integration
     else
-      f_inte_grow!(FG, f, dom)
+      shattered_doms = f_inte_grow!(FG, f, dom)
     end
+  end
+  # if it is not the result
+  if f != last(FG.factors)
+    new_patches = rewire!(f, dom, shattered_doms)
   end
 end
 
