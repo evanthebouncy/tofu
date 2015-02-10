@@ -1,5 +1,5 @@
 include("/home/evan/Documents/research/tofu/Factor.jl")
-PROP_AMOUNT = 1.0
+PROP_AMOUNT = 0.8
 Gdict = Dict{Any, Any}()
 
 # the baseline random strategy for growth
@@ -495,7 +495,7 @@ function heuristic_grow!(FG :: FactorGraph)
   best_fact, best_dom = find_best_split_lazy!(FG)
   println(best_fact.f_name, "    ", best_dom)
   FG.cost_recent = Set{(Factor, Domain)}()
-  FG.integral_recent = Dict{(SumPolyProdC, ASCIIString, Float64, Float64), SumPolyProdC}()
+  # FG.integral_recent = Dict{(SumPolyProdC, ASCIIString, Float64, Float64), SumPolyProdC}()
 
   factor_grow!(FG, best_fact, best_dom)
 end

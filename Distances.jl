@@ -17,6 +17,11 @@ function equal_dist(x1, x2)
   (0.5 * (x1 - x2)^2) ^ 0.5
 end
 
+# inequality x1 != x2
+function unequal_dist(x1, x2)
+  max(1.0 - equal_dist(x1, x2), 0.0)
+end
+
 # negation x1 == -x2
 function neg_dist(x1, x2)
   (0.5 * (x1 + x2)^2) ^ 0.5
@@ -47,7 +52,29 @@ function plus_dist(y, x1, x2)
   (3 * (1/3 * (x1+x2-y))^2) ^ 0.5
 end
 
-
+# indirect equal y = (x1 == x2)
+function eq_eq_dist(y, x1, x2)
+  dist_uneq = 0
+  # if the two numbers are sufficiently different, take projection
+  if (abs(x1 - x2) > 1)
+    dist_uneq = y^2
+  # otherwise, takes the two lines:
+  # x2 = x1+1, x2 = x1-1 and
+  # take the min dist to those two lines
+  else
+    dist_uneq1 = y^2 +
+                 (0.5*(x2-x1-1))^2 +
+                 (0.5*(x1-x2+1))^2
+    dist_uneq2 = y^2 +
+                 (0.5*(x2-x1+1))^2 +
+                 (0.5*(x1-x2-1))^2
+    dist_uneq = min(dist_uneq1, dist_uneq2)
+  end
+  dist_eq = (0.5*(x2-x1))^2 +
+              (0.5*(x1-x2))^2 +
+              (y-1)^2
+  return min(dist_eq, dist_uneq)
+end
 
 # ======================================================================
 # convert distances to actual potential functions!
@@ -101,4 +128,15 @@ uniform_pot = Potential(
       0.0
     end
     )), (x, a, b) -> 0.0)
+
+function get_discrete_uniform(possible_vals::Array{Float64})
+  all_dists = Function[]
+  for val in possible_vals
+    push!(all_dists, get_const_dist(val))
+  end
+  function dist_fun(x)
+    min([dist_f(x)*10.0 for dist_f in all_dists]..., 1e10)
+  end
+  get_potential_from_dist(dist_fun)
+end
 
