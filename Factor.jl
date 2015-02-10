@@ -242,13 +242,13 @@ function shatter!(var_order, dom :: Domain, p :: Partition, bsp :: BSP)
     end
   end
 
-  shatter!_rec(var_order, Domain[dom], p, bsp, length(var_order))
+  #shatter!_rec(var_order, Domain[dom], p, bsp, length(var_order))
+  shatter!_rec(var_order, Domain[dom], p, bsp, 1)
 end
 
 # rewire the children parent relationship. Given a parent that's been shattered, rewire its children for better fit
-# also computes a set of better bounds for the children's patches, and give the children's domain->patch dictionary upon return
-function rewire!(p_fact::Factor, p_dom::Domain, shattered_doms::Array{Domain})
-  println("rewiring")
+# also computes a set of better bounds for the children's patches, and give a set of domains (which had altered patches) upon return
+function rewire!(FG::FactorGraph, p_fact::Factor, p_dom::Domain, shattered_doms::Array{Domain})
   old_children_rels = FG.rel_domain_children[(p_fact, p_dom)]
   # erase all the old childrens relation from FG
   for old_child_rel in old_children_rels
@@ -256,32 +256,79 @@ function rewire!(p_fact::Factor, p_dom::Domain, shattered_doms::Array{Domain})
   end
   # repopulate the child_relation by recomputing the patch
   type1 = old_children_rels[1]
-  println(typeof(type1))
   if typeof(type1) == DomainMult
-    println("detected mult")
-    ret = Dict{Domain, Patch}()
+    ret = Set{Domain}()
     fact_rel_type = type1.fmultop
     f_mult, f1, f2 = fact_rel_type.f_mult, fact_rel_type.f1, fact_rel_type.f2
     for old_child_rel in old_children_rels
       dom_mult = old_child_rel.d_mult
       new_patch = patch_mult(FG, f_mult.var_order, dom_mult, f1, f2, f_mult)
       f_mult.potential_bounds[dom_mult] = new_patch
-      ret[dom_mult] = new_patch
+      push!(ret, dom_mult)
     end
-    return ret
+    return f_mult, ret
   end
   if typeof(type1) == DomainInte
-    println("detected inte")
-    ret = Dict{Domain, Patch}()
+    ret = Set{Domain}()
     fact_rel_type = type1.finteop
     f1, inte_var, f_inte = fact_rel_type.f1, fact_rel_type.inte_var, fact_rel_type.f_inte
     for old_child_rel in old_children_rels
       dom_inte = old_child_rel.d_inte
       new_patch = patch_integrate(FG, f_inte.var_order, dom_inte, f1, inte_var, f_inte)
       f_inte.potential_bounds[dom_inte] = new_patch
-      ret[dom_inte] = new_patch
+      push!(ret, dom_inte)
     end
-    return ret
+    return f_inte, ret
+  end
+end
+
+# recursively propagate a set of (better) bounds by re-evaluating the patches of the domains
+# and get the next set of domains too.
+function propagate_bounds!(FG::FactorGraph, prev_fact::Factor, prev_changed_doms::Set{Domain})
+  cur_rel = FG.rel_factor_child[prev_fact]
+  if typeof(cur_rel) == FactorMult
+    f1, f2, f_cur = cur_rel.f1, cur_rel.f2, cur_rel.f_mult
+    changed_doms = Set{Domain}()
+    for prev_dom in prev_changed_doms
+      if (prev_fact, prev_dom) in keys(FG.rel_domain_children)
+        children_rels = FG.rel_domain_children[(prev_fact, prev_dom)]
+        for c in children_rels
+          push!(changed_doms, c.d_mult)
+        end
+      end
+    end
+    for changed_dom in changed_doms
+      new_patch = patch_mult(FG, f_cur.var_order, changed_dom, f1, f2, f_cur, false)
+      f_cur.potential_bounds[changed_dom] = new_patch
+    end
+    return f_cur, changed_doms
+  end
+
+  if typeof(cur_rel) == FactorInte
+    f1, inte_var, f_cur = cur_rel.f1, cur_rel.inte_var, cur_rel.f_inte
+    changed_doms = Set{Domain}()
+    for prev_dom in prev_changed_doms
+      if (prev_fact, prev_dom) in keys(FG.rel_domain_children)
+        children_rels = FG.rel_domain_children[(prev_fact, prev_dom)]
+        for c in children_rels
+          push!(changed_doms, c.d_inte)
+        end
+      end
+    end
+    for changed_dom in changed_doms
+      new_patch = patch_integrate(FG, f_cur.var_order, changed_dom, f1, inte_var, f_cur, false)
+      f_cur.potential_bounds[changed_dom] = new_patch
+    end
+    return f_cur, changed_doms
+  end
+end
+
+function propagate_bounds_rec!(FG::FactorGraph, fact::Factor, changed_doms::Set{Domain})
+  if fact == last(FG.factors)
+    return
+  else
+    nxt_f, nxt_changed_doms = propagate_bounds!(FG, fact, changed_doms)
+    return propagate_bounds_rec!(FG, nxt_f, nxt_changed_doms)
   end
 end
 
@@ -289,7 +336,7 @@ end
 function patch_pot(FG :: FactorGraph, var_order, dom :: Domain, pot :: Potential, bnd_method="approx", deg=2)
   lower_poly, upper_poly = get_poly_lower_upper(pot, var_order, dom, deg, bnd_method)
   lowest_of_lower = lowest_possible(lower_poly, dom, bnd_method)
-  lower_poly = (if lowest_of_lower < -1e-6
+  lower_poly = (if lowest_of_lower < 0.0
                   make_zero(lower_poly)
                 else
                   lower_poly
@@ -323,7 +370,7 @@ function f_pot_grow!(FG :: FactorGraph, f :: Factor, dom :: Domain)
 end
 
 # give a domain, and 2 factors f1 and f2
-function patch_mult (FG :: FactorGraph, var_order, dom :: Domain, f1 :: Factor, f2 :: Factor, f_mult :: Factor)
+function patch_mult (FG :: FactorGraph, var_order, dom :: Domain, f1 :: Factor, f2 :: Factor, f_mult :: Factor, mutate=true)
   shrink1 = diminish_dom_dim(var_order, f1.var_order, dom)
   shrink2 = diminish_dom_dim(var_order, f2.var_order, dom)
   best_cover1 = best_covering(shrink1, f1.bsp)
@@ -332,9 +379,11 @@ function patch_mult (FG :: FactorGraph, var_order, dom :: Domain, f1 :: Factor, 
   p_l = sppc_mult(patch1.p_l, patch2.p_l)
   p_u = sppc_mult(patch1.p_u, patch2.p_u)
   # register relationship in FG
-  fact_mult = FactorMult(f1, f2, f_mult)
-  domain_mult = DomainMult(fact_mult, best_cover1, best_cover2, dom)
-  add_rel_domain!(FG, domain_mult)
+  if mutate
+    fact_mult = FactorMult(f1, f2, f_mult)
+    domain_mult = DomainMult(fact_mult, best_cover1, best_cover2, dom)
+    add_rel_domain!(FG, domain_mult)
+  end
   Patch(dom, p_l, p_u)
 end
 
@@ -374,7 +423,7 @@ function ∫_memo (FG::FactorGraph, sppc :: SumPolyProdC, x :: ASCIIString, a, b
 end
 
 # give a domain, and the factor it integrates from
-function patch_integrate (FG :: FactorGraph, var_order, dom :: Domain, f1 :: Factor, inte_var_name, f_inte :: Factor)
+function patch_integrate (FG :: FactorGraph, var_order, dom :: Domain, f1 :: Factor, inte_var_name, f_inte :: Factor, mutate=true)
   smallest_cover = find_smallest_cover(f1.bsp, dom, var_order, f1.var_order, inte_var_name)
   integrated_pots = (SumPolyProdC,SumPolyProdC)[]
   for s_dom in smallest_cover
@@ -392,9 +441,11 @@ function patch_integrate (FG :: FactorGraph, var_order, dom :: Domain, f1 :: Fac
                           end
                           )
   # register relationship in FG and book keepings
-  fact_inte = FactorInte(f1, inte_var_name, f_inte)
-  domain_inte = DomainInte(fact_inte, [s_dom for s_dom in smallest_cover], dom)
-  add_rel_domain!(FG, domain_inte)
+  if mutate
+    fact_inte = FactorInte(f1, inte_var_name, f_inte)
+    domain_inte = DomainInte(fact_inte, [s_dom for s_dom in smallest_cover], dom)
+    add_rel_domain!(FG, domain_inte)
+  end
   Patch(dom, lower_pol, upper_pol)
 end
 
@@ -441,7 +492,8 @@ function factor_grow!(FG :: FactorGraph, f :: Factor, dom :: Domain)
   end
   # if it is not the result
   if f != last(FG.factors)
-    new_patches = rewire!(f, dom, shattered_doms)
+    nxt_f, new_doms = rewire!(FG, f, dom, shattered_doms)
+    propagate_bounds_rec!(FG, nxt_f, new_doms)
   end
 end
 

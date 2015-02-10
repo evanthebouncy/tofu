@@ -16,15 +16,15 @@ function initialize_test ()
   FG = init_factor_graph()
 
   # our constant c is 20
-  f_const = f_pot(FG, "f_c", const_pot, ["c"], (Float64,Float64)[bigdom for i in 1:1], "approx", 2)
+  f_const = f_pot(FG, "f_c", const_pot, ["c"], (Float64,Float64)[bigdom for i in 1:1], "approx", 1)
   # our observation is 10
-  f_ob = f_pot(FG, "f_ob", ob_pot, ["ob"], (Float64,Float64)[bigdom for i in 1:1], "approx", 2)
+  f_ob = f_pot(FG, "f_ob", ob_pot, ["ob"], (Float64,Float64)[bigdom for i in 1:1], "approx", 1)
   # end = start + 20
-  f_plus1 = f_pot(FG, "f_plus", plus_pot, ["end", "start", "c"], (Float64,Float64)[bigdom for i in 1:3], "approx", 2)
+  f_plus1 = f_pot(FG, "f_plus", plus_pot, ["end", "start", "c"], (Float64,Float64)[bigdom for i in 1:3], "approx", 1)
   # the observation is drawn from uniform
-  f_unif1 = f_pot(FG, "f_unif1", uniform_pot, ["ob", "start", "end"],(Float64,Float64)[bigdom for i in 1:3],  "approx", 2)
+  f_unif1 = f_pot(FG, "f_unif1", uniform_pot, ["ob", "start", "end"],(Float64,Float64)[bigdom for i in 1:3],  "approx", 1)
   # the prediction is also drawn from uniform
-  f_unif2 = f_pot(FG, "f_unif2", uniform_pot, ["pred", "start", "end"], (Float64,Float64)[bigdom for i in 1:3],  "approx", 2)
+  f_unif2 = f_pot(FG, "f_unif2", uniform_pot, ["pred", "start", "end"], (Float64,Float64)[bigdom for i in 1:3],  "approx", 1)
 
   # we first multiply the plus by const
   f_plus2 = f_mult(FG, "f_plus2", f_plus1, f_const, (Float64,Float64)[bigdom for i in 1:3])
@@ -46,12 +46,10 @@ end
 
 FG = initialize_test()
 
-function displayshit(x)
-  println(x[1][1].f_name, " ", x[1][2], " ", x[2])
-end
+FG.factors[9].potential_bounds
 
 function profile_test()
-  for i in 1:10
+  for i in 1:1000
     println(i)
     heuristic_grow!(FG)
   end

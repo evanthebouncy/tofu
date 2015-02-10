@@ -284,7 +284,7 @@ function filter_doms_by_imprecision(FG::FactorGraph, f::Factor, doms::Set{Domain
   end
   ret = Set{Domain}()
   cur_cost = 0.0
-  while (cur_cost < (total_cost * fraction - 1e-6)) & (length(cost_queue) > 0)
+  while (cur_cost < (total_cost * fraction)) & (length(cost_queue) > 0)
     f_dom, d_cost = Collections.dequeue!(cost_queue)
     push!(ret, f_dom[2])
     cur_cost = cur_cost + d_cost
@@ -440,7 +440,7 @@ function find_best_split!(FG :: FactorGraph)
   # if the recomputed cost is the same, for SURE we want to split this one!! so we exit the loop
   # however if the recomputed cost is smaller... then we have to update
   stuck = 0
-  while recomputed_cost < (cur_cost - 1e-6)
+  while recomputed_cost < cur_cost
     stuck = stuck + 1
     @show(stuck)
     FG.memoized_cost[(cur_f, cur_dom)] = recomputed_cost
@@ -476,7 +476,7 @@ function find_best_split_lazy!(FG :: FactorGraph)
   # if the recomputed cost is the same, for SURE we want to split this one!! so we exit the loop
   # however if the recomputed cost is smaller... then we have to update
   stuck = 0
-  while recomputed_cost < (cur_cost - 1e-6)
+  while recomputed_cost < cur_cost
     stuck = stuck + 1
     @show(stuck)
     FG.memoized_cost[(cur_f, cur_dom)] = recomputed_cost
@@ -552,12 +552,16 @@ function draw_f_imprecision2d(FG, f)
        Geom.rectbin)
 end
 
-function draw_f_countour_2d(FG, f)
+function draw_f_countour_2d(FG, f, bnd="upper")
   dom = f.bsp.cover_domain
   dom_xx, dom_yy = dom[1], dom[2]
   dom_x = linspace(dom_xx..., 1000)
   dom_y = linspace(dom_yy..., 1000)
-  plot(z=(x,y)->feval_upper(f,[x,y]), x=dom_x, y=dom_y, Geom.contour)
+  if bnd=="upper"
+    plot(z=(x,y)->feval_upper(f,[x,y]), x=dom_x, y=dom_y, Geom.contour)
+  else
+    plot(z=(x,y)->feval_lower(f,[x,y]), x=dom_x, y=dom_y, Geom.contour)
+  end
 end
 
 function draw_f_imprecision1d(FG, f)

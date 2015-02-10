@@ -62,7 +62,7 @@ end
 
 # a gaussian version of it
 function dist_to_potential(dist)
-  2.0^(-1.0 * dist^2)
+  2.0^(-1.0 * dist^2) + 0.001
 end
 
 # convert distance into potential bounder
